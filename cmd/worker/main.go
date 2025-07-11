@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -213,8 +215,11 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
+	// Normalize repository URL to the expected owner/repo format
+	normalized := normalizeRepoURL(repoURL)
+
 	// Prepare git clone command with PAT
-	cloneCmd := fmt.Sprintf("git clone https://%s@github.com/%s.git /tmp/deployknot-app", pat, repoURL)
+	cloneCmd := fmt.Sprintf("git clone https://%s@github.com/%s.git /tmp/deployknot-app", pat, normalized)
 	if branch != "main" {
 		cloneCmd += fmt.Sprintf(" && cd /tmp/deployknot-app && git checkout %s", branch)
 	}
@@ -336,6 +341,17 @@ func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshCli
 // Helper function to create int pointer
 func intPtr(i int) *int {
 	return &i
+}
+
+// normalizeRepoURL converts various GitHub URL formats to "owner/repo"
+func normalizeRepoURL(raw string) string {
+	u, err := url.Parse(raw)
+	if err == nil && u.Host != "" {
+		raw = strings.TrimPrefix(u.Path, "/")
+	}
+	raw = strings.TrimPrefix(raw, "/")
+	raw = strings.TrimSuffix(raw, ".git")
+	return raw
 }
 
 func main() {
