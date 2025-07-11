@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"deployknot/internal/database"
@@ -34,6 +35,9 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 	deploymentID := uuid.New()
 	now := time.Now()
 
+	// Generate container name if not provided
+	containerName := s.generateContainerName(deploymentID, req.ContainerName, req.ProjectName, req.DeploymentName)
+
 	// Create deployment record
 	deployment := &models.Deployment{
 		ID:                   deploymentID,
@@ -48,6 +52,8 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		GitHubBranch:         req.GitHubBranch,
 		EnvironmentVars:      &req.EnvironmentVars,
 		AdditionalVars:       req.AdditionalVars,
+		Port:                 req.Port,
+		ContainerName:        &containerName,
 		ProjectName:          req.ProjectName,
 		DeploymentName:       req.DeploymentName,
 	}
@@ -73,6 +79,8 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		"github_branch":    req.GitHubBranch,
 		"environment_vars": req.EnvironmentVars,
 		"additional_vars":  req.AdditionalVars,
+		"port":             req.Port,
+		"container_name":   containerName,
 		"project_name":     req.ProjectName,
 		"deployment_name":  req.DeploymentName,
 	}
@@ -97,6 +105,8 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		TargetIP:       req.TargetIP,
 		GitHubRepoURL:  req.GitHubRepoURL,
 		GitHubBranch:   req.GitHubBranch,
+		Port:           req.Port,
+		ContainerName:  &containerName,
 		CreatedAt:      now,
 		ProjectName:    req.ProjectName,
 		DeploymentName: req.DeploymentName,
@@ -119,6 +129,8 @@ func (s *DeploymentService) GetDeployment(ctx context.Context, id uuid.UUID) (*m
 		TargetIP:       deployment.TargetIP,
 		GitHubRepoURL:  deployment.GitHubRepoURL,
 		GitHubBranch:   deployment.GitHubBranch,
+		Port:           deployment.Port,
+		ContainerName:  deployment.ContainerName,
 		CreatedAt:      deployment.CreatedAt,
 		StartedAt:      deployment.StartedAt,
 		CompletedAt:    deployment.CompletedAt,
@@ -249,5 +261,55 @@ func (s *DeploymentService) ValidateDeploymentRequest(req *models.CreateDeployme
 		return fmt.Errorf("github_branch is required")
 	}
 
+	if req.Port < 1 || req.Port > 65535 {
+		return fmt.Errorf("port must be between 1 and 65535")
+	}
+
 	return nil
+}
+
+// generateContainerName generates a unique container name for the deployment
+func (s *DeploymentService) generateContainerName(deploymentID uuid.UUID, containerName, projectName, deploymentName *string) string {
+	// If container name is provided, use it
+	if containerName != nil && *containerName != "" {
+		return *containerName
+	}
+
+	// Generate based on project and deployment name if available
+	if projectName != nil && *projectName != "" && deploymentName != nil && *deploymentName != "" {
+		// Sanitize names for Docker container naming (lowercase, alphanumeric, hyphens only)
+		project := sanitizeContainerName(*projectName)
+		deployment := sanitizeContainerName(*deploymentName)
+		return fmt.Sprintf("deployknot-%s-%s", project, deployment)
+	}
+
+	// Fallback to deployment ID
+	return fmt.Sprintf("deployknot-%s", deploymentID.String())
+}
+
+// sanitizeContainerName sanitizes a string for use as a Docker container name
+func sanitizeContainerName(name string) string {
+	// Convert to lowercase and replace spaces/special chars with hyphens
+	// Keep only alphanumeric and hyphens
+	var result []rune
+	for _, r := range strings.ToLower(name) {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			result = append(result, r)
+		} else {
+			result = append(result, '-')
+		}
+	}
+
+	// Remove consecutive hyphens and trim
+	sanitized := strings.Trim(string(result), "-")
+
+	// Ensure it's not empty and has reasonable length
+	if sanitized == "" {
+		sanitized = "app"
+	}
+	if len(sanitized) > 50 {
+		sanitized = sanitized[:50]
+	}
+
+	return sanitized
 }

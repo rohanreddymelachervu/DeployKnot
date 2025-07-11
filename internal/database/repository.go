@@ -32,9 +32,10 @@ func (r *Repository) CreateDeployment(deployment *models.Deployment) error {
 		INSERT INTO deploy_knot.deployments (
 			id, created_at, updated_at, status, target_ip, ssh_username, 
 			ssh_password_encrypted, github_repo_url, github_pat_encrypted, 
-			github_branch, additional_vars, created_by, project_name, deployment_name
+			github_branch, additional_vars, port, container_name, created_by, 
+			project_name, deployment_name
 		) VALUES (
-			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16
 		)
 	`
 
@@ -77,6 +78,8 @@ func (r *Repository) CreateDeployment(deployment *models.Deployment) error {
 		githubPATEncrypted,
 		deployment.GitHubBranch,
 		additionalVarsJSON,
+		deployment.Port,
+		deployment.ContainerName,
 		deployment.CreatedBy,
 		deployment.ProjectName,
 		deployment.DeploymentName,
@@ -106,8 +109,8 @@ func (r *Repository) GetDeployment(id uuid.UUID) (*models.Deployment, error) {
 	query := `
 		SELECT id, created_at, updated_at, status, target_ip, ssh_username,
 		       ssh_password_encrypted, github_repo_url, github_pat_encrypted,
-		       github_branch, additional_vars, started_at, completed_at,
-		       error_message, created_by, project_name, deployment_name
+		       github_branch, additional_vars, port, container_name, started_at, 
+		       completed_at, error_message, created_by, project_name, deployment_name
 		FROM deploy_knot.deployments
 		WHERE id = $1
 	`
@@ -127,6 +130,8 @@ func (r *Repository) GetDeployment(id uuid.UUID) (*models.Deployment, error) {
 		&deployment.GitHubPATEncrypted,
 		&deployment.GitHubBranch,
 		&additionalVarsJSON,
+		&deployment.Port,
+		&deployment.ContainerName,
 		&deployment.StartedAt,
 		&deployment.CompletedAt,
 		&deployment.ErrorMessage,

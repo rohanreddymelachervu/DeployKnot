@@ -90,24 +90,30 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	// Add log entry
 	w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "info", "Starting deployment process", "deployment_start", nil)
 
-	// Extract deployment data
-	targetIP, _ := job.Data["target_ip"].(string)
-	sshUsername, _ := job.Data["ssh_username"].(string)
-	sshPassword, _ := job.Data["ssh_password"].(string)
-	githubRepoURL, _ := job.Data["github_repo_url"].(string)
-	githubPAT, _ := job.Data["github_pat"].(string)
-	githubBranch, _ := job.Data["github_branch"].(string)
-	environmentVars, _ := job.Data["environment_vars"].(string)
+	// Extract deployment data using robust helpers
+	targetIP := getStringFromMap(job.Data, "target_ip")
+	sshUsername := getStringFromMap(job.Data, "ssh_username")
+	sshPassword := getStringFromMap(job.Data, "ssh_password")
+	githubRepoURL := getStringFromMap(job.Data, "github_repo_url")
+	githubPAT := getStringFromMap(job.Data, "github_pat")
+	githubBranch := getStringFromMap(job.Data, "github_branch")
+	environmentVars := getStringFromMap(job.Data, "environment_vars")
+	port := getIntFromMap(job.Data, "port")
+	containerName := getStringFromMap(job.Data, "container_name")
 
 	// Debug logging for credentials (masked)
 	w.logger.WithFields(logrus.Fields{
-		"target_ip":           targetIP,
-		"ssh_username":        sshUsername,
-		"ssh_password_length": len(sshPassword),
-		"github_repo_url":     githubRepoURL,
-		"github_pat_length":   len(githubPAT),
-		"github_branch":       githubBranch,
-		"env_vars_length":     len(environmentVars),
+		"target_ip":             targetIP,
+		"ssh_username":          sshUsername,
+		"ssh_password_length":   len(sshPassword),
+		"github_repo_url":       githubRepoURL,
+		"github_pat_length":     len(githubPAT),
+		"github_branch":         githubBranch,
+		"env_vars_length":       len(environmentVars),
+		"port":                  port,
+		"container_name":        containerName,
+		"container_name_length": len(containerName),
+		"job_data_keys":         getMapKeys(job.Data),
 	}).Info("Extracted deployment credentials")
 
 	// Validate required fields
@@ -127,7 +133,7 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "info", "SSH connection established", "ssh_connect", nil)
 
 	// Execute deployment steps
-	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch, environmentVars); err != nil {
+	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch, environmentVars, port, containerName); err != nil {
 		errorMsg := fmt.Sprintf("Deployment failed: %v", err)
 		w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "error", errorMsg, "deployment_failed", nil)
 
@@ -183,24 +189,24 @@ func (w *Worker) connectSSH(host, username, password string) (*ssh.Client, error
 }
 
 // executeDeploymentSteps executes the deployment steps
-func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch, envVars string) error {
+func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch, envVars string, port int, containerName string) error {
 	// Step 1: Clone the repository
 	if err := w.cloneRepository(ctx, deploymentID, sshClient, repoURL, pat, branch); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
 	// Step 2: Build Docker image
-	if err := w.buildDockerImage(ctx, deploymentID, sshClient); err != nil {
+	if err := w.buildDockerImage(ctx, deploymentID, sshClient, containerName); err != nil {
 		return fmt.Errorf("failed to build Docker image: %w", err)
 	}
 
 	// Step 3: Run Docker container
-	if err := w.runDockerContainer(ctx, deploymentID, sshClient, envVars); err != nil {
+	if err := w.runDockerContainer(ctx, deploymentID, sshClient, envVars, port, containerName); err != nil {
 		return fmt.Errorf("failed to run Docker container: %w", err)
 	}
 
 	// Step 4: Health check
-	if err := w.healthCheck(ctx, deploymentID, sshClient); err != nil {
+	if err := w.healthCheck(ctx, deploymentID, sshClient, containerName); err != nil {
 		return fmt.Errorf("health check failed: %w", err)
 	}
 
@@ -254,16 +260,22 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 }
 
 // buildDockerImage builds the Docker image
-func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client) error {
+func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, containerName string) error {
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker build", "docker_build", intPtr(2))
+
+	// Ensure we have a valid container name
+	if containerName == "" {
+		containerName = fmt.Sprintf("deployknot-%s", deploymentID.String())
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name: %s", containerName), "docker_build", intPtr(2))
+	}
 
 	session, err := sshClient.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
-	// Build Docker image
-	buildCmd := "cd /tmp/deployknot-app && docker build -t deployknot-app:latest ."
+	// Build Docker image with the container name as the image tag
+	buildCmd := fmt.Sprintf("cd /tmp/deployknot-app && docker build -t %s:latest .", containerName)
 	output, err := session.CombinedOutput(buildCmd)
 	session.Close() // Close immediately after use
 	if err != nil {
@@ -276,23 +288,30 @@ func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, s
 }
 
 // runDockerContainer runs the Docker container
-func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, envVars string) error {
+func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, envVars string, port int, containerName string) error {
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker container", "docker_run", intPtr(3))
 
-	// Stop existing container if running
+	// Ensure we have a valid container name
+	if containerName == "" {
+		containerName = fmt.Sprintf("deployknot-%s", deploymentID.String())
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name: %s", containerName), "docker_run", intPtr(3))
+	}
+
+	// Stop and remove existing container if running
 	stopSession, err := sshClient.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create SSH session for stop: %w", err)
 	}
 
-	stopCmd := "docker stop deployknot-app || true && docker rm deployknot-app || true"
+	// More aggressive cleanup - stop, remove, and also remove any containers with the same name
+	stopCmd := fmt.Sprintf("docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker ps -a --filter name=%s --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", containerName, containerName, containerName)
 	stopOutput, err := stopSession.CombinedOutput(stopCmd)
 	stopSession.Close() // Close immediately after use
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to stop existing container")
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Stop existing container warning: %v, output: %s", err, string(stopOutput)), "docker_stop", intPtr(3))
 	} else {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Existing container stopped: %s", string(stopOutput)), "docker_stop", intPtr(3))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Existing container cleanup completed: %s", string(stopOutput)), "docker_stop", intPtr(3))
 	}
 
 	// Wait a moment for cleanup
@@ -344,9 +363,9 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	// Run container with environment file if available
 	var runCmd string
 	if envVars != "" {
-		runCmd = "docker run -d --name deployknot-app -p 3000:3000 --env-file /tmp/deployknot-app/.env deployknot-app:latest"
+		runCmd = fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file /tmp/deployknot-app/.env %s:latest", containerName, port, port, containerName)
 	} else {
-		runCmd = "docker run -d --name deployknot-app -p 3000:3000 deployknot-app:latest"
+		runCmd = fmt.Sprintf("docker run -d --name %s -p %d:%d %s:latest", containerName, port, port, containerName)
 	}
 
 	runOutput, err := runSession.CombinedOutput(runCmd)
@@ -362,8 +381,14 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 }
 
 // healthCheck performs a health check on the deployed application
-func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client) error {
+func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, containerName string) error {
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting health check", "health_check", intPtr(4))
+
+	// Ensure we have a valid container name
+	if containerName == "" {
+		containerName = fmt.Sprintf("deployknot-%s", deploymentID.String())
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name for health check: %s", containerName), "health_check", intPtr(4))
+	}
 
 	session, err := sshClient.NewSession()
 	if err != nil {
@@ -371,7 +396,7 @@ func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshCli
 	}
 
 	// Check if container is running
-	checkCmd := "docker ps --filter name=deployknot-app --format 'table {{.Names}}\t{{.Status}}'"
+	checkCmd := fmt.Sprintf("docker ps --filter name=%s --format 'table {{.Names}}\t{{.Status}}'", containerName)
 	output, err := session.CombinedOutput(checkCmd)
 	session.Close() // Close immediately after use
 	if err != nil {
@@ -397,6 +422,55 @@ func normalizeRepoURL(raw string) string {
 	raw = strings.TrimPrefix(raw, "/")
 	raw = strings.TrimSuffix(raw, ".git")
 	return raw
+}
+
+// getMapKeys returns the keys of a map as a slice of strings
+func getMapKeys(m map[string]interface{}) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	return keys
+}
+
+// Helper functions for robust extraction from map[string]interface{}
+func getStringFromMap(m map[string]interface{}, key string) string {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case string:
+			return val
+		case fmt.Stringer:
+			return val.String()
+		case float64:
+			// For numbers that should be strings
+			return fmt.Sprintf("%v", val)
+		case int:
+			return fmt.Sprintf("%d", val)
+		case nil:
+			return ""
+		default:
+			return fmt.Sprintf("%v", val)
+		}
+	}
+	return ""
+}
+
+func getIntFromMap(m map[string]interface{}, key string) int {
+	if v, ok := m[key]; ok {
+		switch val := v.(type) {
+		case int:
+			return val
+		case float64:
+			return int(val)
+		case string:
+			var i int
+			_, err := fmt.Sscanf(val, "%d", &i)
+			if err == nil {
+				return i
+			}
+		}
+	}
+	return 0
 }
 
 func main() {

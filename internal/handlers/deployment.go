@@ -190,27 +190,22 @@ func (h *DeploymentHandler) streamDeploymentLogs(c *gin.Context, deploymentID uu
 	})
 	c.Writer.Flush()
 
-	// Get initial logs
 	ctx := c.Request.Context()
-	logs, err := h.deploymentService.GetDeploymentLogs(ctx, deploymentID, 50)
-	if err != nil {
-		h.logger.WithError(err).Error("Failed to get initial deployment logs")
-		c.SSEvent("error", gin.H{
-			"message": "Failed to get deployment logs",
-		})
-		c.Writer.Flush()
-		return
-	}
+	var lastLogID uuid.UUID
 
 	// Send initial logs
-	for _, log := range logs {
-		c.SSEvent("log", log)
-		c.Writer.Flush()
+	logs, err := h.deploymentService.GetDeploymentLogs(ctx, deploymentID, 50)
+	if err == nil {
+		for _, log := range logs {
+			c.SSEvent("log", log)
+			c.Writer.Flush()
+			if log.ID.String() > lastLogID.String() {
+				lastLogID = log.ID
+			}
+		}
 	}
 
-	// TODO: Implement real-time log streaming
-	// For now, we'll just keep the connection alive
-	ticker := time.NewTicker(5 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
 	for {
@@ -219,10 +214,19 @@ func (h *DeploymentHandler) streamDeploymentLogs(c *gin.Context, deploymentID uu
 			h.logger.WithField("deployment_id", deploymentID).Info("Client disconnected from log stream")
 			return
 		case <-ticker.C:
+			// Poll for new logs
+			newLogs, err := h.deploymentService.GetDeploymentLogs(ctx, deploymentID, 100)
+			if err == nil {
+				for _, log := range newLogs {
+					if log.ID.String() > lastLogID.String() {
+						c.SSEvent("log", log)
+						c.Writer.Flush()
+						lastLogID = log.ID
+					}
+				}
+			}
 			// Send heartbeat
-			c.SSEvent("heartbeat", gin.H{
-				"timestamp": time.Now().Format(time.RFC3339),
-			})
+			c.SSEvent("heartbeat", gin.H{"timestamp": time.Now().Format(time.RFC3339)})
 			c.Writer.Flush()
 		}
 	}

@@ -31,6 +31,8 @@ type Deployment struct {
 	GitHubBranch         string                 `json:"github_branch" db:"github_branch"`
 	EnvironmentVars      *string                `json:"environment_vars,omitempty" db:"environment_vars"`
 	AdditionalVars       map[string]interface{} `json:"additional_vars,omitempty" db:"additional_vars"`
+	Port                 int                    `json:"port" db:"port"`
+	ContainerName        *string                `json:"container_name,omitempty" db:"container_name"`
 	StartedAt            *time.Time             `json:"started_at,omitempty" db:"started_at"`
 	CompletedAt          *time.Time             `json:"completed_at,omitempty" db:"completed_at"`
 	ErrorMessage         *string                `json:"error_message,omitempty" db:"error_message"`
@@ -49,6 +51,8 @@ type CreateDeploymentRequest struct {
 	GitHubBranch    string                 `json:"github_branch" binding:"required"`
 	EnvironmentVars string                 `json:"environment_vars,omitempty"`
 	AdditionalVars  map[string]interface{} `json:"additional_vars,omitempty"`
+	Port            int                    `json:"port" binding:"min=1,max=65535"`
+	ContainerName   *string                `json:"container_name,omitempty"`
 	ProjectName     *string                `json:"project_name,omitempty"`
 	DeploymentName  *string                `json:"deployment_name,omitempty"`
 }
@@ -60,6 +64,8 @@ type DeploymentResponse struct {
 	TargetIP       string           `json:"target_ip"`
 	GitHubRepoURL  string           `json:"github_repo_url"`
 	GitHubBranch   string           `json:"github_branch"`
+	Port           int              `json:"port"`
+	ContainerName  *string          `json:"container_name,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
 	StartedAt      *time.Time       `json:"started_at,omitempty"`
 	CompletedAt    *time.Time       `json:"completed_at,omitempty"`
