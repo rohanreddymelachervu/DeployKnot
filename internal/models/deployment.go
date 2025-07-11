@@ -29,6 +29,7 @@ type Deployment struct {
 	GitHubRepoURL        string                 `json:"github_repo_url" db:"github_repo_url"`
 	GitHubPATEncrypted   *string                `json:"-" db:"github_pat_encrypted"`
 	GitHubBranch         string                 `json:"github_branch" db:"github_branch"`
+	EnvironmentVars      *string                `json:"environment_vars,omitempty" db:"environment_vars"`
 	AdditionalVars       map[string]interface{} `json:"additional_vars,omitempty" db:"additional_vars"`
 	StartedAt            *time.Time             `json:"started_at,omitempty" db:"started_at"`
 	CompletedAt          *time.Time             `json:"completed_at,omitempty" db:"completed_at"`
@@ -40,15 +41,16 @@ type Deployment struct {
 
 // CreateDeploymentRequest represents the request to create a deployment
 type CreateDeploymentRequest struct {
-	TargetIP       string                 `json:"target_ip" binding:"required,ip"`
-	SSHUsername    string                 `json:"ssh_username" binding:"required"`
-	SSHPassword    string                 `json:"ssh_password" binding:"required"`
-	GitHubRepoURL  string                 `json:"github_repo_url" binding:"required"`
-	GitHubPAT      string                 `json:"github_pat" binding:"required"`
-	GitHubBranch   string                 `json:"github_branch" binding:"required"`
-	AdditionalVars map[string]interface{} `json:"additional_vars,omitempty"`
-	ProjectName    *string                `json:"project_name,omitempty"`
-	DeploymentName *string                `json:"deployment_name,omitempty"`
+	TargetIP        string                 `json:"target_ip" binding:"required,ip"`
+	SSHUsername     string                 `json:"ssh_username" binding:"required"`
+	SSHPassword     string                 `json:"ssh_password" binding:"required"`
+	GitHubRepoURL   string                 `json:"github_repo_url" binding:"required"`
+	GitHubPAT       string                 `json:"github_pat" binding:"required"`
+	GitHubBranch    string                 `json:"github_branch" binding:"required"`
+	EnvironmentVars string                 `json:"environment_vars,omitempty"`
+	AdditionalVars  map[string]interface{} `json:"additional_vars,omitempty"`
+	ProjectName     *string                `json:"project_name,omitempty"`
+	DeploymentName  *string                `json:"deployment_name,omitempty"`
 }
 
 // DeploymentResponse represents the response for a deployment

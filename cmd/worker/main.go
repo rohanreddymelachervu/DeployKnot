@@ -97,6 +97,7 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	githubRepoURL, _ := job.Data["github_repo_url"].(string)
 	githubPAT, _ := job.Data["github_pat"].(string)
 	githubBranch, _ := job.Data["github_branch"].(string)
+	environmentVars, _ := job.Data["environment_vars"].(string)
 
 	// Debug logging for credentials (masked)
 	w.logger.WithFields(logrus.Fields{
@@ -106,6 +107,7 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 		"github_repo_url":     githubRepoURL,
 		"github_pat_length":   len(githubPAT),
 		"github_branch":       githubBranch,
+		"env_vars_length":     len(environmentVars),
 	}).Info("Extracted deployment credentials")
 
 	// Validate required fields
@@ -125,7 +127,7 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "info", "SSH connection established", "ssh_connect", nil)
 
 	// Execute deployment steps
-	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch); err != nil {
+	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch, environmentVars); err != nil {
 		errorMsg := fmt.Sprintf("Deployment failed: %v", err)
 		w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "error", errorMsg, "deployment_failed", nil)
 
@@ -181,7 +183,7 @@ func (w *Worker) connectSSH(host, username, password string) (*ssh.Client, error
 }
 
 // executeDeploymentSteps executes the deployment steps
-func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch string) error {
+func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch, envVars string) error {
 	// Step 1: Clone the repository
 	if err := w.cloneRepository(ctx, deploymentID, sshClient, repoURL, pat, branch); err != nil {
 		return fmt.Errorf("failed to clone repository: %w", err)
@@ -193,7 +195,7 @@ func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.U
 	}
 
 	// Step 3: Run Docker container
-	if err := w.runDockerContainer(ctx, deploymentID, sshClient); err != nil {
+	if err := w.runDockerContainer(ctx, deploymentID, sshClient, envVars); err != nil {
 		return fmt.Errorf("failed to run Docker container: %w", err)
 	}
 
@@ -209,7 +211,22 @@ func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.U
 func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch string) error {
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting repository clone", "git_clone", intPtr(1))
 
-	// Create session
+	// First, clean up existing directory
+	cleanupSession, err := sshClient.NewSession()
+	if err != nil {
+		return fmt.Errorf("failed to create SSH session for cleanup: %w", err)
+	}
+
+	cleanupCmd := "rm -rf /tmp/deployknot-app"
+	cleanupOutput, err := cleanupSession.CombinedOutput(cleanupCmd)
+	cleanupSession.Close()
+	if err != nil {
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Cleanup warning: %v, output: %s", err, string(cleanupOutput)), "git_cleanup", intPtr(1))
+	} else {
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Existing directory cleaned up", "git_cleanup", intPtr(1))
+	}
+
+	// Create session for cloning
 	session, err := sshClient.NewSession()
 	if err != nil {
 		return fmt.Errorf("failed to create SSH session: %w", err)
@@ -259,7 +276,7 @@ func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, s
 }
 
 // runDockerContainer runs the Docker container
-func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client) error {
+func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, envVars string) error {
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker container", "docker_run", intPtr(3))
 
 	// Stop existing container if running
@@ -303,7 +320,35 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker available: %s", string(dockerCheckOutput)), "docker_check", intPtr(3))
 
-	runCmd := "docker run -d --name deployknot-app -p 3000:3000 deployknot-app:latest"
+	// Create .env file if environment variables are provided
+	if envVars != "" {
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Creating .env file with environment variables", "env_setup", intPtr(3))
+
+		envSession, err := sshClient.NewSession()
+		if err != nil {
+			return fmt.Errorf("failed to create SSH session for env file: %w", err)
+		}
+
+		// Create .env file in the app directory
+		envCmd := fmt.Sprintf("cd /tmp/deployknot-app && cat > .env << 'EOF'\n%s\nEOF", envVars)
+		envOutput, err := envSession.CombinedOutput(envCmd)
+		envSession.Close()
+		if err != nil {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Failed to create .env file: %v, output: %s", err, string(envOutput)), "env_setup", intPtr(3))
+			return fmt.Errorf("failed to create .env file: %w, output: %s", err, string(envOutput))
+		}
+
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Environment variables file created successfully", "env_setup", intPtr(3))
+	}
+
+	// Run container with environment file if available
+	var runCmd string
+	if envVars != "" {
+		runCmd = "docker run -d --name deployknot-app -p 3000:3000 --env-file /tmp/deployknot-app/.env deployknot-app:latest"
+	} else {
+		runCmd = "docker run -d --name deployknot-app -p 3000:3000 deployknot-app:latest"
+	}
+
 	runOutput, err := runSession.CombinedOutput(runCmd)
 	runSession.Close() // Close immediately after use
 

@@ -46,6 +46,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		GitHubRepoURL:        req.GitHubRepoURL,
 		GitHubPATEncrypted:   &req.GitHubPAT,
 		GitHubBranch:         req.GitHubBranch,
+		EnvironmentVars:      &req.EnvironmentVars,
 		AdditionalVars:       req.AdditionalVars,
 		ProjectName:          req.ProjectName,
 		DeploymentName:       req.DeploymentName,
@@ -64,15 +65,16 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 
 	// Enqueue deployment job
 	deploymentData := map[string]interface{}{
-		"target_ip":       req.TargetIP,
-		"ssh_username":    req.SSHUsername,
-		"ssh_password":    req.SSHPassword,
-		"github_repo_url": req.GitHubRepoURL,
-		"github_pat":      req.GitHubPAT,
-		"github_branch":   req.GitHubBranch,
-		"additional_vars": req.AdditionalVars,
-		"project_name":    req.ProjectName,
-		"deployment_name": req.DeploymentName,
+		"target_ip":        req.TargetIP,
+		"ssh_username":     req.SSHUsername,
+		"ssh_password":     req.SSHPassword,
+		"github_repo_url":  req.GitHubRepoURL,
+		"github_pat":       req.GitHubPAT,
+		"github_branch":    req.GitHubBranch,
+		"environment_vars": req.EnvironmentVars,
+		"additional_vars":  req.AdditionalVars,
+		"project_name":     req.ProjectName,
+		"deployment_name":  req.DeploymentName,
 	}
 
 	if err := s.queue.EnqueueDeploymentJob(ctx, deploymentID, deploymentData); err != nil {
