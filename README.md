@@ -21,7 +21,7 @@ A CI/CD automation tool for Webknot built with Go + Gin + Ansible.
                                            │
                                            ▼
                                      ┌──────────────┐
-                                     │  Ansible     │
+                                     │  Golang     │
                                      │  Worker      │
                                      └──────────────┘
 ```
