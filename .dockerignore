@@ -1,0 +1,49 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+DOCKER_HUB_SETUP.md
+ENVIRONMENT_VARIABLES.md
+MULTIPART_ENV_UPLOAD.md
+POSTMAN_COLLECTION_README.md
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Build artifacts
+bin/
+dist/
+
+# Test files
+*_test.go
+test/
+
+# Docker files (except the ones we need)
+Dockerfile*
+.dockerignore
+
+# GitHub Actions
+.github/
+
+# API collections
+DeployKnot_API_Collection.json
+
+# Sample files
+sample.env 
