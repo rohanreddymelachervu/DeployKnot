@@ -74,3 +74,12 @@ func (h *HealthHandler) HealthCheck(c *gin.Context) {
 		c.JSON(http.StatusServiceUnavailable, response)
 	}
 }
+
+// HealthCheck is a simple health check function for the router
+func HealthCheck(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"status":    "healthy",
+		"timestamp": time.Now(),
+		"message":   "DeployKnot API is running",
+	})
+}

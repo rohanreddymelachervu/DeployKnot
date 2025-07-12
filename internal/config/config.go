@@ -11,10 +11,11 @@ import (
 
 // Config holds all configuration for the application
 type Config struct {
-	Server   ServerConfig
-	Database DatabaseConfig
-	Redis    RedisConfig
-	Logging  LoggingConfig
+	Server    ServerConfig
+	Database  DatabaseConfig
+	Redis     RedisConfig
+	Logging   LoggingConfig
+	JWTSecret string
 }
 
 // ServerConfig holds server-related configuration
@@ -82,6 +83,7 @@ func Load() (*Config, error) {
 		Logging: LoggingConfig{
 			Level: getEnv("LOG_LEVEL", "info"),
 		},
+		JWTSecret: getEnv("JWT_SECRET", "changeme-super-secret"),
 	}
 
 	return config, nil
@@ -115,6 +117,11 @@ func (c *Config) GetRedisURL() string {
 		c.Redis.Port,
 		c.Redis.DB,
 	)
+}
+
+// GetJWTSecret returns the JWT secret
+func (c *Config) GetJWTSecret() string {
+	return c.JWTSecret
 }
 
 // Helper functions

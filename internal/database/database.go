@@ -13,8 +13,9 @@ import (
 
 // Database represents the database connection
 type Database struct {
-	DB     *sql.DB
-	logger *logrus.Logger
+	DB         *sql.DB
+	Repository *Repository
+	logger     *logrus.Logger
 }
 
 // New creates a new database connection
@@ -31,9 +32,12 @@ func New(databaseURL string, logger *logrus.Logger) (*Database, error) {
 
 	logger.Info("Database connection established")
 
+	repository := NewRepository(db, logger)
+
 	return &Database{
-		DB:     db,
-		logger: logger,
+		DB:         db,
+		Repository: repository,
+		logger:     logger,
 	}, nil
 }
 

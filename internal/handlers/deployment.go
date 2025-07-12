@@ -1,10 +1,14 @@
 package handlers
 
 import (
+	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 	"time"
 
+	"deployknot/internal/middleware"
 	"deployknot/internal/models"
 	"deployknot/internal/services"
 
@@ -29,8 +33,18 @@ func NewDeploymentHandler(deploymentService *services.DeploymentService, logger 
 
 // CreateDeployment handles POST /api/v1/deployments
 func (h *DeploymentHandler) CreateDeployment(c *gin.Context) {
+	// Get user ID from context
+	userID, err := middleware.GetUserIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":   "Unauthorized",
+			"message": "User not found in context",
+		})
+		return
+	}
+
 	var req models.CreateDeploymentRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
+	if err := c.ShouldBind(&req); err != nil {
 		h.logger.WithError(err).Error("Failed to bind deployment request")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Invalid request",
@@ -39,8 +53,8 @@ func (h *DeploymentHandler) CreateDeployment(c *gin.Context) {
 		return
 	}
 
-	// Validate request
-	if err := h.deploymentService.ValidateDeploymentRequest(&req); err != nil {
+	// Validate required fields
+	if err := req.Validate(); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error":   "Validation failed",
 			"message": err.Error(),
@@ -48,9 +62,36 @@ func (h *DeploymentHandler) CreateDeployment(c *gin.Context) {
 		return
 	}
 
-	// Create deployment
+	// Handle .env file upload
+	var envFilePath string
+	if file, err := c.FormFile("env_file"); err == nil && file != nil {
+		// Create temp directory if it doesn't exist
+		tempDir := "temp_env_files"
+		if err := os.MkdirAll(tempDir, 0755); err != nil {
+			h.logger.WithError(err).Error("Failed to create temp directory")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Internal server error",
+				"message": "Failed to process environment file",
+			})
+			return
+		}
+
+		// Save uploaded file
+		envFilePath = filepath.Join(tempDir, fmt.Sprintf("%s_%s", uuid.New().String(), file.Filename))
+		if err := c.SaveUploadedFile(file, envFilePath); err != nil {
+			h.logger.WithError(err).Error("Failed to save uploaded file")
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":   "Internal server error",
+				"message": "Failed to save environment file",
+			})
+			return
+		}
+
+		h.logger.WithField("env_file_path", envFilePath).Info("Environment file uploaded successfully")
+	}
+
 	ctx := c.Request.Context()
-	deployment, err := h.deploymentService.CreateDeployment(ctx, &req)
+	deployment, err := h.deploymentService.CreateDeploymentWithEnvFile(ctx, &req, envFilePath, userID)
 	if err != nil {
 		h.logger.WithError(err).Error("Failed to create deployment")
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -59,9 +100,6 @@ func (h *DeploymentHandler) CreateDeployment(c *gin.Context) {
 		})
 		return
 	}
-
-	// Add initial log entry
-	h.deploymentService.AddDeploymentLog(ctx, deployment.ID, "info", "Deployment created successfully", "create_deployment", nil)
 
 	c.JSON(http.StatusCreated, deployment)
 }
@@ -232,11 +270,49 @@ func (h *DeploymentHandler) streamDeploymentLogs(c *gin.Context, deploymentID uu
 	}
 }
 
-// ListDeployments handles GET /api/v1/deployments
-func (h *DeploymentHandler) ListDeployments(c *gin.Context) {
-	// TODO: Implement pagination and filtering
+// GetDeployments handles GET /api/v1/deployments
+func (h *DeploymentHandler) GetDeployments(c *gin.Context) {
+	// Get user ID from context
+	userID, err := middleware.GetUserIDFromContext(c)
+	if err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{
+			"error":   "Unauthorized",
+			"message": "User not found in context",
+		})
+		return
+	}
+
+	// Parse query parameters
+	limit := 50 // default limit
+	offset := 0 // default offset
+
+	if limitStr := c.Query("limit"); limitStr != "" {
+		if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+			limit = l
+		}
+	}
+
+	if offsetStr := c.Query("offset"); offsetStr != "" {
+		if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+			offset = o
+		}
+	}
+
+	ctx := c.Request.Context()
+	deployments, err := h.deploymentService.GetDeploymentsByUser(ctx, userID, limit, offset)
+	if err != nil {
+		h.logger.WithError(err).Error("Failed to get deployments")
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error":   "Failed to get deployments",
+			"message": err.Error(),
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
-		"message":     "List deployments endpoint - to be implemented",
-		"deployments": []gin.H{},
+		"deployments": deployments,
+		"limit":       limit,
+		"offset":      offset,
+		"count":       len(deployments),
 	})
 }

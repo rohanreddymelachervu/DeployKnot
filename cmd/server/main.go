@@ -11,7 +11,6 @@ import (
 	"deployknot/internal/api"
 	"deployknot/internal/config"
 	"deployknot/internal/database"
-	"deployknot/internal/handlers"
 	"deployknot/internal/services"
 	"deployknot/pkg/logger"
 
@@ -48,26 +47,16 @@ func main() {
 	}
 	defer redis.Close()
 
-	// Initialize repository
-	repo := database.NewRepository(db.DB, log.Logger)
-
 	// Initialize queue service
 	queueService := services.NewQueueService(redis.Client, log.Logger)
 
-	// Initialize services
-	deploymentService := services.NewDeploymentService(repo, queueService, log.Logger)
-
-	// Initialize handlers
-	healthHandler := handlers.NewHealthHandler(db, redis, log.Logger)
-	deploymentHandler := handlers.NewDeploymentHandler(deploymentService, log.Logger)
-
 	// Initialize router
-	router := api.NewRouter(log.Logger, healthHandler, deploymentHandler)
+	router := api.SetupRouter(db, queueService, log.Logger, cfg.GetJWTSecret())
 
 	// Create HTTP server
 	server := &http.Server{
 		Addr:         ":" + cfg.Server.Port,
-		Handler:      router.GetEngine(),
+		Handler:      router,
 		ReadTimeout:  cfg.Server.ReadTimeout,
 		WriteTimeout: cfg.Server.WriteTimeout,
 		IdleTimeout:  cfg.Server.IdleTimeout,
