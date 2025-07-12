@@ -1,6 +1,9 @@
 package models
 
 import (
+	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -15,6 +18,7 @@ const (
 	DeploymentStatusCompleted DeploymentStatus = "completed"
 	DeploymentStatusFailed    DeploymentStatus = "failed"
 	DeploymentStatusCancelled DeploymentStatus = "cancelled"
+	DeploymentStatusAborted   DeploymentStatus = "aborted"
 )
 
 // Deployment represents a deployment record
@@ -39,22 +43,115 @@ type Deployment struct {
 	CreatedBy            *string                `json:"created_by,omitempty" db:"created_by"`
 	ProjectName          *string                `json:"project_name,omitempty" db:"project_name"`
 	DeploymentName       *string                `json:"deployment_name,omitempty" db:"deployment_name"`
+	UserID               *uuid.UUID             `json:"user_id,omitempty" db:"user_id"`
 }
 
 // CreateDeploymentRequest represents the request to create a deployment
+// For multipart form: all fields are form fields except env_file, which is a file upload
+// Use binding:"required" for required fields
 type CreateDeploymentRequest struct {
-	TargetIP        string                 `json:"target_ip" binding:"required,ip"`
-	SSHUsername     string                 `json:"ssh_username" binding:"required"`
-	SSHPassword     string                 `json:"ssh_password" binding:"required"`
-	GitHubRepoURL   string                 `json:"github_repo_url" binding:"required"`
-	GitHubPAT       string                 `json:"github_pat" binding:"required"`
-	GitHubBranch    string                 `json:"github_branch" binding:"required"`
-	EnvironmentVars string                 `json:"environment_vars,omitempty"`
-	AdditionalVars  map[string]interface{} `json:"additional_vars,omitempty"`
-	Port            int                    `json:"port" binding:"min=1,max=65535"`
-	ContainerName   *string                `json:"container_name,omitempty"`
-	ProjectName     *string                `json:"project_name,omitempty"`
-	DeploymentName  *string                `json:"deployment_name,omitempty"`
+	TargetIP       string  `form:"target_ip" binding:"required,ip"`
+	SSHUsername    string  `form:"ssh_username" binding:"required"`
+	SSHPassword    string  `form:"ssh_password" binding:"required"`
+	GitHubRepoURL  string  `form:"github_repo_url" binding:"required"`
+	GitHubPAT      string  `form:"github_pat" binding:"required"`
+	GitHubBranch   string  `form:"github_branch" binding:"required"`
+	Port           string  `form:"port" binding:"required"` // Will be converted to int
+	ContainerName  *string `form:"container_name"`
+	ProjectName    *string `form:"project_name"`
+	DeploymentName *string `form:"deployment_name"`
+	// env_file is handled as a file upload in the handler, not as a struct field
+	// AdditionalVars can be handled as a JSON string if needed
+	AdditionalVars map[string]interface{} `form:"additional_vars"`
+}
+
+// Validate validates the deployment request
+func (req *CreateDeploymentRequest) Validate() error {
+	if req.TargetIP == "" {
+		return fmt.Errorf("target_ip is required")
+	}
+	if req.SSHUsername == "" {
+		return fmt.Errorf("ssh_username is required")
+	}
+	if req.SSHPassword == "" {
+		return fmt.Errorf("ssh_password is required")
+	}
+	if req.GitHubRepoURL == "" {
+		return fmt.Errorf("github_repo_url is required")
+	}
+	if req.GitHubPAT == "" {
+		return fmt.Errorf("github_pat is required")
+	}
+	if req.Port == "" {
+		return fmt.Errorf("port is required")
+	}
+	return nil
+}
+
+// GetPortAsInt converts the Port string to int
+func (r *CreateDeploymentRequest) GetPortAsInt() (int, error) {
+	if r.Port == "" {
+		return 0, fmt.Errorf("port is required")
+	}
+
+	port, err := strconv.Atoi(r.Port)
+	if err != nil {
+		return 0, fmt.Errorf("invalid port number: %s", r.Port)
+	}
+
+	if port < 1 || port > 65535 {
+		return 0, fmt.Errorf("port must be between 1 and 65535")
+	}
+
+	return port, nil
+}
+
+// EnvironmentVariable represents a single environment variable
+type EnvironmentVariable struct {
+	Key   string `json:"key" binding:"required"`
+	Value string `json:"value"`
+}
+
+// EnvironmentVariables represents a collection of environment variables
+type EnvironmentVariables []EnvironmentVariable
+
+// ToEnvFile converts environment variables to .env file format
+func (ev EnvironmentVariables) ToEnvFile() string {
+	var lines []string
+	for _, env := range ev {
+		lines = append(lines, fmt.Sprintf("%s=%s", env.Key, env.Value))
+	}
+	return strings.Join(lines, "\n")
+}
+
+// FromEnvFile parses .env file content into EnvironmentVariables
+func FromEnvFile(content string) EnvironmentVariables {
+	var envVars EnvironmentVariables
+	lines := strings.Split(content, "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		if strings.Contains(line, "=") {
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) == 2 {
+				key := strings.TrimSpace(parts[0])
+				value := strings.TrimSpace(parts[1])
+				// Remove quotes if they exist
+				value = strings.Trim(value, `"'`)
+
+				envVars = append(envVars, EnvironmentVariable{
+					Key:   key,
+					Value: value,
+				})
+			}
+		}
+	}
+
+	return envVars
 }
 
 // DeploymentResponse represents the response for a deployment

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"net/url"
 	"os"
@@ -18,6 +19,7 @@ import (
 	"deployknot/pkg/logger"
 
 	"github.com/google/uuid"
+	"github.com/pkg/sftp"
 	"github.com/sirupsen/logrus"
 	"golang.org/x/crypto/ssh"
 )
@@ -97,11 +99,12 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	githubRepoURL := getStringFromMap(job.Data, "github_repo_url")
 	githubPAT := getStringFromMap(job.Data, "github_pat")
 	githubBranch := getStringFromMap(job.Data, "github_branch")
-	environmentVars := getStringFromMap(job.Data, "environment_vars")
 	port := getIntFromMap(job.Data, "port")
 	containerName := getStringFromMap(job.Data, "container_name")
+	// New: env_file_path
+	envFilePath := getStringFromMap(job.Data, "env_file_path")
+	environmentVars := getStringFromMap(job.Data, "environment_vars") // fallback only
 
-	// Debug logging for credentials (masked)
 	w.logger.WithFields(logrus.Fields{
 		"target_ip":             targetIP,
 		"ssh_username":          sshUsername,
@@ -109,6 +112,7 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 		"github_repo_url":       githubRepoURL,
 		"github_pat_length":     len(githubPAT),
 		"github_branch":         githubBranch,
+		"env_file_path":         envFilePath,
 		"env_vars_length":       len(environmentVars),
 		"port":                  port,
 		"container_name":        containerName,
@@ -118,7 +122,9 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 
 	// Validate required fields
 	if targetIP == "" || sshUsername == "" || sshPassword == "" || githubRepoURL == "" || githubPAT == "" || githubBranch == "" {
-		return fmt.Errorf("missing required deployment parameters")
+		errorMsg := "missing required deployment parameters"
+		w.markAllStepsAsFailed(ctx, job.DeploymentID, errorMsg)
+		return fmt.Errorf("%s", errorMsg)
 	}
 
 	// Connect to target server via SSH
@@ -126,14 +132,20 @@ func (w *Worker) processDeploymentJob(ctx context.Context, job *services.Job) er
 	if err != nil {
 		errorMsg := fmt.Sprintf("Failed to connect to target server: %v", err)
 		w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "error", errorMsg, "ssh_connect", nil)
+		w.markStepAsFailed(ctx, 1, job.DeploymentID, errorMsg)
+		w.markRemainingStepsAsFailed(ctx, job.DeploymentID, 1)
+		// Update deployment status to failed
+		if updateErr := w.deploymentService.UpdateDeploymentStatus(ctx, job.DeploymentID, models.DeploymentStatusFailed, &errorMsg); updateErr != nil {
+			w.logger.WithError(updateErr).Error("Failed to update deployment status to failed")
+		}
 		return fmt.Errorf("failed to connect to target server: %w", err)
 	}
 	defer sshClient.Close()
 
 	w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "info", "SSH connection established", "ssh_connect", nil)
 
-	// Execute deployment steps
-	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch, environmentVars, port, containerName); err != nil {
+	// Execute deployment steps (pass envFilePath and environmentVars)
+	if err := w.executeDeploymentSteps(ctx, job.DeploymentID, sshClient, githubRepoURL, githubPAT, githubBranch, envFilePath, environmentVars, port, containerName); err != nil {
 		errorMsg := fmt.Sprintf("Deployment failed: %v", err)
 		w.deploymentService.AddDeploymentLog(ctx, job.DeploymentID, "error", errorMsg, "deployment_failed", nil)
 
@@ -189,24 +201,40 @@ func (w *Worker) connectSSH(host, username, password string) (*ssh.Client, error
 }
 
 // executeDeploymentSteps executes the deployment steps
-func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch, envVars string, port int, containerName string) error {
+func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch, envFilePath, envVars string, port int, containerName string) error {
 	// Step 1: Clone the repository
 	if err := w.cloneRepository(ctx, deploymentID, sshClient, repoURL, pat, branch); err != nil {
+		w.markRemainingStepsAsFailed(ctx, deploymentID, 1)
 		return fmt.Errorf("failed to clone repository: %w", err)
 	}
 
 	// Step 2: Build Docker image
 	if err := w.buildDockerImage(ctx, deploymentID, sshClient, containerName); err != nil {
+		w.markRemainingStepsAsFailed(ctx, deploymentID, 2)
 		return fmt.Errorf("failed to build Docker image: %w", err)
 	}
 
 	// Step 3: Run Docker container
-	if err := w.runDockerContainer(ctx, deploymentID, sshClient, envVars, port, containerName); err != nil {
-		return fmt.Errorf("failed to run Docker container: %w", err)
+	if envFilePath != "" {
+		// Copy env file to target instance
+		if err := w.copyEnvFileToTarget(ctx, deploymentID, sshClient, envFilePath); err != nil {
+			w.markRemainingStepsAsFailed(ctx, deploymentID, 3)
+			return fmt.Errorf("failed to copy env file to target: %w", err)
+		}
+		if err := w.runDockerContainerWithEnvFile(ctx, deploymentID, sshClient, envFilePath, port, containerName); err != nil {
+			w.markRemainingStepsAsFailed(ctx, deploymentID, 3)
+			return fmt.Errorf("failed to run Docker container with env file: %w", err)
+		}
+	} else {
+		if err := w.runDockerContainer(ctx, deploymentID, sshClient, envVars, port, containerName); err != nil {
+			w.markRemainingStepsAsFailed(ctx, deploymentID, 3)
+			return fmt.Errorf("failed to run Docker container: %w", err)
+		}
 	}
 
 	// Step 4: Health check
 	if err := w.healthCheck(ctx, deploymentID, sshClient, containerName); err != nil {
+		w.markRemainingStepsAsFailed(ctx, deploymentID, 4)
 		return fmt.Errorf("health check failed: %w", err)
 	}
 
@@ -215,11 +243,18 @@ func (w *Worker) executeDeploymentSteps(ctx context.Context, deploymentID uuid.U
 
 // cloneRepository clones the Git repository
 func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, repoURL, pat, branch string) error {
+	// Update step status to running
+	if err := w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusRunning, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to running")
+	}
+
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting repository clone", "git_clone", intPtr(1))
 
 	// First, clean up existing directory
 	cleanupSession, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for cleanup"
+		w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for cleanup: %w", err)
 	}
 
@@ -235,6 +270,8 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 	// Create session for cloning
 	session, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for cloning"
+		w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
@@ -251,16 +288,29 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 	output, err := session.CombinedOutput(cloneCmd)
 	session.Close() // Close immediately after use
 	if err != nil {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Git clone failed: %v, output: %s", err, string(output)), "git_clone", intPtr(1))
+		errorMsg := fmt.Sprintf("Git clone failed: %v, output: %s", err, string(output))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "git_clone", intPtr(1))
+		w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("git clone failed: %w, output: %s", err, string(output))
 	}
 
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Repository cloned successfully: %s", string(output)), "git_clone", intPtr(1))
+
+	// Update step status to completed
+	if err := w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusCompleted, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to completed")
+	}
+
 	return nil
 }
 
 // buildDockerImage builds the Docker image
 func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, containerName string) error {
+	// Update step status to running
+	if err := w.updateDeploymentStep(ctx, deploymentID, 2, models.DeploymentStatusRunning, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to running")
+	}
+
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker build", "docker_build", intPtr(2))
 
 	// Ensure we have a valid container name
@@ -271,6 +321,8 @@ func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, s
 
 	session, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for Docker build"
+		w.updateDeploymentStep(ctx, deploymentID, 2, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
@@ -279,16 +331,29 @@ func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, s
 	output, err := session.CombinedOutput(buildCmd)
 	session.Close() // Close immediately after use
 	if err != nil {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Docker build failed: %v, output: %s", err, string(output)), "docker_build", intPtr(2))
+		errorMsg := fmt.Sprintf("Docker build failed: %v, output: %s", err, string(output))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_build", intPtr(2))
+		w.updateDeploymentStep(ctx, deploymentID, 2, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("docker build failed: %w, output: %s", err, string(output))
 	}
 
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker image built successfully: %s", string(output)), "docker_build", intPtr(2))
+
+	// Update step status to completed
+	if err := w.updateDeploymentStep(ctx, deploymentID, 2, models.DeploymentStatusCompleted, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to completed")
+	}
+
 	return nil
 }
 
 // runDockerContainer runs the Docker container
 func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, envVars string, port int, containerName string) error {
+	// Update step status to running
+	if err := w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusRunning, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to running")
+	}
+
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker container", "docker_run", intPtr(3))
 
 	// Ensure we have a valid container name
@@ -300,6 +365,8 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	// Stop and remove existing container if running
 	stopSession, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for stop"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for stop: %w", err)
 	}
 
@@ -320,12 +387,16 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	// Run new container
 	runSession, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for run"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for run: %w", err)
 	}
 
 	// First check if Docker is available
 	dockerCheckSession, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for docker check"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for docker check: %w", err)
 	}
 
@@ -340,21 +411,49 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker available: %s", string(dockerCheckOutput)), "docker_check", intPtr(3))
 
 	// Create .env file if environment variables are provided
+	envFilePath := ""
 	if envVars != "" {
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Creating .env file with environment variables", "env_setup", intPtr(3))
 
+		// Create a unique env file path for this deployment
+		envFilePath = fmt.Sprintf("/tmp/deployknot-env-%s.env", deploymentID.String())
+
 		envSession, err := sshClient.NewSession()
 		if err != nil {
+			errorMsg := "Failed to create SSH session for env file"
+			w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 			return fmt.Errorf("failed to create SSH session for env file: %w", err)
 		}
 
-		// Create .env file in the app directory
-		envCmd := fmt.Sprintf("cd /tmp/deployknot-app && cat > .env << 'EOF'\n%s\nEOF", envVars)
+		// Process and validate environment variables
+		processedEnvVars := w.processEnvironmentVariables(envVars)
+
+		// Create .env file with proper formatting
+		envCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF", envFilePath, processedEnvVars)
 		envOutput, err := envSession.CombinedOutput(envCmd)
 		envSession.Close()
 		if err != nil {
-			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Failed to create .env file: %v, output: %s", err, string(envOutput)), "env_setup", intPtr(3))
+			errorMsg := fmt.Sprintf("Failed to create .env file: %v, output: %s", err, string(envOutput))
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "env_setup", intPtr(3))
+			w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 			return fmt.Errorf("failed to create .env file: %w, output: %s", err, string(envOutput))
+		}
+
+		// Verify the .env file was created and has content
+		verifySession, err := sshClient.NewSession()
+		if err != nil {
+			errorMsg := "Failed to create SSH session for env verification"
+			w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+			return fmt.Errorf("failed to create SSH session for env verification: %w", err)
+		}
+
+		verifyCmd := fmt.Sprintf("ls -la %s && echo '--- ENV FILE CONTENT ---' && cat %s", envFilePath, envFilePath)
+		verifyOutput, err := verifySession.CombinedOutput(verifyCmd)
+		verifySession.Close()
+		if err != nil {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Env file verification warning: %v, output: %s", err, string(verifyOutput)), "env_verify", intPtr(3))
+		} else {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Environment file created and verified: %s", string(verifyOutput)), "env_verify", intPtr(3))
 		}
 
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Environment variables file created successfully", "env_setup", intPtr(3))
@@ -362,8 +461,8 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 
 	// Run container with environment file if available
 	var runCmd string
-	if envVars != "" {
-		runCmd = fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file /tmp/deployknot-app/.env %s:latest", containerName, port, port, containerName)
+	if envFilePath != "" {
+		runCmd = fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file %s %s:latest", containerName, port, port, envFilePath, containerName)
 	} else {
 		runCmd = fmt.Sprintf("docker run -d --name %s -p %d:%d %s:latest", containerName, port, port, containerName)
 	}
@@ -372,16 +471,68 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	runSession.Close() // Close immediately after use
 
 	if err != nil {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Docker run failed: %v, output: %s", err, string(runOutput)), "docker_run", intPtr(3))
+		errorMsg := fmt.Sprintf("Docker run failed: %v, output: %s", err, string(runOutput))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_run", intPtr(3))
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("docker run failed: %w, output: %s", err, string(runOutput))
 	}
 
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker container started successfully: %s", string(runOutput)), "docker_run", intPtr(3))
+
+	// Update step status to completed
+	if err := w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusCompleted, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to completed")
+	}
+
 	return nil
+}
+
+// processEnvironmentVariables processes and validates environment variables
+func (w *Worker) processEnvironmentVariables(envVars string) string {
+	// Split by newlines and process each line
+	lines := strings.Split(envVars, "\n")
+	var processedLines []string
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue // Skip empty lines
+		}
+
+		// Skip comments
+		if strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		// Validate the format (should be KEY=VALUE)
+		if !strings.Contains(line, "=") {
+			continue // Skip invalid lines
+		}
+
+		// Ensure proper formatting
+		parts := strings.SplitN(line, "=", 2)
+		if len(parts) == 2 {
+			key := strings.TrimSpace(parts[0])
+			value := strings.TrimSpace(parts[1])
+
+			// Remove quotes if they exist
+			value = strings.Trim(value, `"'`)
+
+			// Reconstruct the line
+			processedLines = append(processedLines, fmt.Sprintf("%s=%s", key, value))
+		}
+	}
+
+	return strings.Join(processedLines, "\n")
 }
 
 // healthCheck performs a health check on the deployed application
 func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, containerName string) error {
+	// Update step status to running
+	if err := w.updateDeploymentStep(ctx, deploymentID, 4, models.DeploymentStatusRunning, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to running")
+	}
+
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting health check", "health_check", intPtr(4))
 
 	// Ensure we have a valid container name
@@ -392,6 +543,8 @@ func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshCli
 
 	session, err := sshClient.NewSession()
 	if err != nil {
+		errorMsg := "Failed to create SSH session for health check"
+		w.updateDeploymentStep(ctx, deploymentID, 4, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
 
@@ -400,11 +553,259 @@ func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshCli
 	output, err := session.CombinedOutput(checkCmd)
 	session.Close() // Close immediately after use
 	if err != nil {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Health check failed: %v, output: %s", err, string(output)), "health_check", intPtr(4))
+		errorMsg := fmt.Sprintf("Health check failed: %v, output: %s", err, string(output))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "health_check", intPtr(4))
+		w.updateDeploymentStep(ctx, deploymentID, 4, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("health check failed: %w, output: %s", err, string(output))
 	}
 
 	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Health check passed: %s", string(output)), "health_check", intPtr(4))
+
+	// Update step status to completed
+	if err := w.updateDeploymentStep(ctx, deploymentID, 4, models.DeploymentStatusCompleted, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to completed")
+	}
+
+	return nil
+}
+
+// copyEnvFileToTarget copies the env file from the API server to the target instance via SCP
+func (w *Worker) copyEnvFileToTarget(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, localEnvFilePath string) error {
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Copying uploaded .env file to target instance", "env_upload", intPtr(3))
+	// Use SCP or SFTP to copy the file
+	// For simplicity, use SFTP
+	file, err := os.Open(localEnvFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open local env file: %w", err)
+	}
+	defer file.Close()
+
+	sftpClient, err := sftp.NewClient(sshClient)
+	if err != nil {
+		return fmt.Errorf("failed to create SFTP client: %w", err)
+	}
+	defer sftpClient.Close()
+
+	remotePath := "/tmp/deployknot-uploaded.env"
+	remoteFile, err := sftpClient.Create(remotePath)
+	if err != nil {
+		return fmt.Errorf("failed to create remote env file: %w", err)
+	}
+	defer remoteFile.Close()
+
+	if _, err := io.Copy(remoteFile, file); err != nil {
+		return fmt.Errorf("failed to copy env file to remote: %w", err)
+	}
+
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Uploaded .env file to target instance", "env_upload", intPtr(3))
+	return nil
+}
+
+// runDockerContainerWithEnvFile runs the Docker container using the uploaded env file
+func (w *Worker) runDockerContainerWithEnvFile(ctx context.Context, deploymentID uuid.UUID, sshClient *ssh.Client, envFilePath string, port int, containerName string) error {
+	// Update step status to running
+	if err := w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusRunning, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to running")
+	}
+
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Starting Docker container with uploaded .env file", "docker_run", intPtr(3))
+
+	if containerName == "" {
+		containerName = fmt.Sprintf("deployknot-%s", deploymentID.String())
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name: %s", containerName), "docker_run", intPtr(3))
+	}
+
+	// Stop and remove existing container if running (reuse existing logic)
+	stopSession, err := sshClient.NewSession()
+	if err != nil {
+		errorMsg := "Failed to create SSH session for stop"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("failed to create SSH session for stop: %w", err)
+	}
+	stopCmd := fmt.Sprintf("docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker ps -a --filter name=%s --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", containerName, containerName, containerName)
+	stopOutput, err := stopSession.CombinedOutput(stopCmd)
+	stopSession.Close()
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to stop existing container")
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Stop existing container warning: %v, output: %s", err, string(stopOutput)), "docker_stop", intPtr(3))
+	} else {
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Existing container cleanup completed: %s", string(stopOutput)), "docker_stop", intPtr(3))
+	}
+
+	time.Sleep(2 * time.Second)
+
+	// Run new container with --env-file
+	runSession, err := sshClient.NewSession()
+	if err != nil {
+		errorMsg := "Failed to create SSH session for run"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("failed to create SSH session for run: %w", err)
+	}
+	remoteEnvPath := "/tmp/deployknot-uploaded.env"
+	runCmd := fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file %s %s:latest", containerName, port, port, remoteEnvPath, containerName)
+	runOutput, err := runSession.CombinedOutput(runCmd)
+	runSession.Close()
+	if err != nil {
+		errorMsg := fmt.Sprintf("Docker run failed: %v, output: %s", err, string(runOutput))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_run", intPtr(3))
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("docker run failed: %w, output: %s", err, string(runOutput))
+	}
+
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker container started successfully: %s", string(runOutput)), "docker_run", intPtr(3))
+
+	// Update step status to completed
+	if err := w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusCompleted, nil); err != nil {
+		w.logger.WithError(err).Error("Failed to update step status to completed")
+	}
+
+	return nil
+}
+
+// markRemainingStepsAsFailed marks all remaining steps as failed when a deployment fails
+func (w *Worker) markRemainingStepsAsFailed(ctx context.Context, deploymentID uuid.UUID, failedStepOrder int) {
+	// Get all steps for this deployment
+	steps, err := w.deploymentService.GetDeploymentSteps(ctx, deploymentID)
+	if err != nil {
+		w.logger.WithError(err).Error("Failed to get deployment steps for marking as failed")
+		return
+	}
+
+	// Mark all steps after the failed step as failed
+	for _, step := range steps {
+		if step.StepOrder > failedStepOrder && step.Status == models.DeploymentStatusPending || step.Status == models.DeploymentStatusRunning {
+			errorMsg := fmt.Sprintf("Step abandoned due to failure in step %d", failedStepOrder)
+			if err := w.updateDeploymentStep(ctx, deploymentID, step.StepOrder, models.DeploymentStatusFailed, &errorMsg); err != nil {
+				w.logger.WithError(err).WithField("step_order", step.StepOrder).Error("Failed to mark step as failed")
+			}
+		}
+	}
+
+	w.logger.WithFields(logrus.Fields{
+		"deployment_id":     deploymentID,
+		"failed_step_order": failedStepOrder,
+	}).Info("Marked remaining steps as failed")
+}
+
+// markAllStepsAsFailed marks all steps as failed with an error message
+func (w *Worker) markAllStepsAsFailed(ctx context.Context, deploymentID uuid.UUID, errorMsg string) {
+	steps, err := w.deploymentService.GetDeploymentSteps(ctx, deploymentID)
+	if err != nil {
+		w.logger.WithError(err).Error("Failed to get deployment steps for marking all as failed")
+		return
+	}
+	for _, step := range steps {
+		if step.Status != models.DeploymentStatusCompleted && step.Status != models.DeploymentStatusFailed {
+			if err := w.updateDeploymentStep(ctx, deploymentID, step.StepOrder, models.DeploymentStatusFailed, &errorMsg); err != nil {
+				w.logger.WithError(err).WithField("step_order", step.StepOrder).Error("Failed to mark step as failed (all)")
+			}
+		}
+	}
+	w.logger.WithFields(logrus.Fields{"deployment_id": deploymentID}).Info("Marked all steps as failed")
+}
+
+// markStepAsFailed with an error message
+func (w *Worker) markStepAsFailed(ctx context.Context, stepOrder int, deploymentID uuid.UUID, errorMsg string) error {
+	steps, err := w.deploymentService.GetDeploymentSteps(ctx, deploymentID)
+	if err != nil {
+		w.logger.WithError(err).Error("Failed to get deployment steps")
+	}
+	var targetStep *models.DeploymentStep
+	for _, step := range steps {
+		if step.StepOrder == stepOrder {
+			targetStep = step
+			break
+		}
+	}
+	if targetStep == nil {
+		w.logger.WithFields(logrus.Fields{
+			"deployment_id": deploymentID,
+			"step_order":    stepOrder,
+		}).Error("Step not found")
+		return fmt.Errorf("step not found")
+	}
+
+	// Update step status
+	now := time.Now()
+	targetStep.Status = models.DeploymentStatusFailed
+	targetStep.ErrorMessage = &errorMsg
+	targetStep.CompletedAt = &now
+
+	if targetStep.StartedAt != nil {
+		duration := int(now.Sub(*targetStep.StartedAt).Milliseconds())
+		targetStep.DurationMs = &duration
+	}
+
+	// Update the step in the database
+	if err := w.deploymentService.UpdateDeploymentStep(ctx, targetStep); err != nil {
+		w.logger.WithError(err).Error("Failed to update deployment step")
+		return err
+	}
+
+	w.logger.WithFields(logrus.Fields{
+		"deployment_id": deploymentID,
+		"step_name":     targetStep.StepName,
+		"step_order":    stepOrder,
+		"status":        models.DeploymentStatusFailed,
+	}).Info("Deployment step updated")
+
+	return nil
+}
+
+// updateDeploymentStep updates a deployment step status
+func (w *Worker) updateDeploymentStep(ctx context.Context, deploymentID uuid.UUID, stepOrder int, status models.DeploymentStatus, errorMessage *string) error {
+	// Get the step by deployment ID and step order
+	steps, err := w.deploymentService.GetDeploymentSteps(ctx, deploymentID)
+	if err != nil {
+		w.logger.WithError(err).Error("Failed to get deployment steps")
+		return err
+	}
+
+	// Find the step with the matching order
+	var targetStep *models.DeploymentStep
+	for _, step := range steps {
+		if step.StepOrder == stepOrder {
+			targetStep = step
+			break
+		}
+	}
+
+	if targetStep == nil {
+		w.logger.WithFields(logrus.Fields{
+			"deployment_id": deploymentID,
+			"step_order":    stepOrder,
+		}).Error("Step not found")
+		return fmt.Errorf("step not found")
+	}
+
+	// Update step status
+	now := time.Now()
+	targetStep.Status = status
+	targetStep.ErrorMessage = errorMessage
+
+	if status == models.DeploymentStatusRunning {
+		targetStep.StartedAt = &now
+	} else if status == models.DeploymentStatusCompleted || status == models.DeploymentStatusFailed {
+		targetStep.CompletedAt = &now
+		if targetStep.StartedAt != nil {
+			duration := int(now.Sub(*targetStep.StartedAt).Milliseconds())
+			targetStep.DurationMs = &duration
+		}
+	}
+
+	// Update the step in the database
+	if err := w.deploymentService.UpdateDeploymentStep(ctx, targetStep); err != nil {
+		w.logger.WithError(err).Error("Failed to update deployment step")
+		return err
+	}
+
+	w.logger.WithFields(logrus.Fields{
+		"deployment_id": deploymentID,
+		"step_name":     targetStep.StepName,
+		"step_order":    stepOrder,
+		"status":        status,
+	}).Info("Deployment step updated")
+
 	return nil
 }
 

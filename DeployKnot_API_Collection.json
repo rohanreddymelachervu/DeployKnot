@@ -2,304 +2,319 @@
 	"info": {
 		"_postman_id": "deployknot-api-collection",
 		"name": "DeployKnot API Collection",
-		"description": "Complete API collection for DeployKnot deployment management system",
-		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
-		"_exporter_id": "deployknot-api"
+		"description": "Complete API collection for DeployKnot deployment system with enhanced environment variable support via .env file upload",
+		"schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
 	},
 	"item": [
 		{
 			"name": "Health Check",
-			"item": [
-				{
-					"name": "Health Check - Root",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/health",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"health"
-							]
-						},
-						"description": "Check the health status of the DeployKnot API server"
-					},
-					"response": []
+			"request": {
+				"method": "GET",
+				"header": [],
+				"url": {
+					"raw": "{{base_url}}/api/v1/health",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "health"]
 				},
-				{
-					"name": "Health Check - API v1",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/api/v1/health",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"health"
-							]
-						},
-						"description": "Check the health status of the DeployKnot API v1 endpoints"
-					},
-					"response": []
-				}
-			],
-			"description": "Health check endpoints to verify API server status"
+				"description": "Check if the DeployKnot API server is running and healthy."
+			},
+			"response": []
 		},
 		{
-			"name": "Deployments",
-			"item": [
-				{
-					"name": "List Deployments",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments"
-							]
-						},
-						"description": "Retrieve a list of all deployments"
-					},
-					"response": []
+			"name": "Register User",
+			"request": {
+				"method": "POST",
+				"header": [
+					{"key": "Content-Type", "value": "application/json"}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"username\": \"testuser\",\n  \"email\": \"test@example.com\",\n  \"password\": \"testpass123\"\n}"
 				},
-				{
-					"name": "Create Deployment",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your_ssh_password\",\n  \"github_repo_url\": \"https://github.com/rohanreddymelachervu/DeployKnot-test\",\n  \"github_pat\": \"your_github_pat\",\n  \"github_branch\": \"main\",\n  \"environment_vars\": \"NODE_ENV=production\\nPORT=3000\",\n  \"port\": 3000,\n  \"container_name\": \"my-app\",\n  \"project_name\": \"My Project\",\n  \"deployment_name\": \"Production Deployment\"\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments"
-							]
-						},
-						"description": "Create a new deployment with custom container name and port"
-					},
-					"response": []
+				"url": {
+					"raw": "{{base_url}}/api/v1/auth/register",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "auth", "register"]
 				},
+				"description": "Register a new user."
+			},
+			"response": [
 				{
-					"name": "Create Deployment - Auto Generated Name",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your_ssh_password\",\n  \"github_repo_url\": \"https://github.com/rohanreddymelachervu/DeployKnot-test\",\n  \"github_pat\": \"your_github_pat\",\n  \"github_branch\": \"main\",\n  \"environment_vars\": \"NODE_ENV=production\\nPORT=3000\",\n  \"port\": 3001,\n  \"project_name\": \"My Project\",\n  \"deployment_name\": \"Production Deployment\"\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments"
-							]
-						},
-						"description": "Create a new deployment with auto-generated container name"
-					},
-					"response": []
-				},
-				{
-					"name": "Create Deployment - Minimal",
-					"request": {
-						"method": "POST",
-						"header": [
-							{
-								"key": "Content-Type",
-								"value": "application/json"
-							}
-						],
-						"body": {
-							"mode": "raw",
-							"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your_ssh_password\",\n  \"github_repo_url\": \"https://github.com/rohanreddymelachervu/DeployKnot-test\",\n  \"github_pat\": \"your_github_pat\",\n  \"github_branch\": \"main\",\n  \"port\": 3002\n}"
-						},
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments"
-							]
-						},
-						"description": "Create a new deployment with minimal required fields"
-					},
-					"response": []
-				},
-				{
-					"name": "Get Deployment",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments",
-								"{{deployment_id}}"
-							]
-						},
-						"description": "Get details of a specific deployment by ID"
-					},
-					"response": []
-				},
-				{
-					"name": "Get Deployment Logs - JSON",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/logs?limit=100",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments",
-								"{{deployment_id}}",
-								"logs"
-							],
-							"query": [
-								{
-									"key": "limit",
-									"value": "100",
-									"description": "Number of logs to retrieve (default: 100)"
-								}
-							]
-						},
-						"description": "Get deployment logs as JSON response"
-					},
-					"response": []
-				},
-				{
-					"name": "Get Deployment Logs - SSE",
-					"request": {
-						"method": "GET",
-						"header": [
-							{
-								"key": "Accept",
-								"value": "text/event-stream"
-							},
-							{
-								"key": "Cache-Control",
-								"value": "no-cache"
-							}
-						],
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/logs",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments",
-								"{{deployment_id}}",
-								"logs"
-							]
-						},
-						"description": "Stream deployment logs via Server-Sent Events (SSE). This endpoint returns real-time logs as they are generated during deployment."
-					},
-					"response": []
-				},
-				{
-					"name": "Get Deployment Steps",
-					"request": {
-						"method": "GET",
-						"header": [],
-						"url": {
-							"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/steps",
-							"host": [
-								"{{base_url}}"
-							],
-							"path": [
-								"api",
-								"v1",
-								"deployments",
-								"{{deployment_id}}",
-								"steps"
-							]
-						},
-						"description": "Get deployment steps and their status"
-					},
-					"response": []
+					"code": 201,
+					"body": "{\n  \"message\": \"User registered successfully\",\n  \"user\": {\n    \"id\": \"uuid\",\n    \"username\": \"testuser\",\n    \"email\": \"test@example.com\",\n    \"is_active\": true,\n    \"created_at\": \"2025-07-11T22:00:00Z\"\n  }\n}"
 				}
-			],
-			"description": "Deployment management endpoints for creating, monitoring, and retrieving deployment information"
-		}
-	],
-	"event": [
-		{
-			"listen": "prerequest",
-			"script": {
-				"type": "text/javascript",
-				"exec": [
-					""
-				]
-			}
+			]
 		},
 		{
-			"listen": "test",
-			"script": {
-				"type": "text/javascript",
-				"exec": [
-					""
-				]
-			}
+			"name": "Login User",
+			"request": {
+				"method": "POST",
+				"header": [
+					{"key": "Content-Type", "value": "application/json"}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"username\": \"testuser\",\n  \"password\": \"testpass123\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/auth/login",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "auth", "login"]
+				},
+				"description": "Login as a user and receive a JWT token."
+			},
+			"response": [
+				{
+					"code": 200,
+					"body": "{\n  \"token\": \"<JWT_TOKEN>\",\n  \"user\": {\n    \"id\": \"uuid\",\n    \"username\": \"testuser\",\n    \"email\": \"test@example.com\",\n    \"is_active\": true,\n    \"created_at\": \"2025-07-11T22:00:00Z\"\n  },\n  \"expires_at\": \"2025-07-18T22:00:00Z\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Get Profile",
+			"request": {
+				"method": "GET",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/auth/profile",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "auth", "profile"]
+				},
+				"description": "Get the authenticated user's profile. Requires JWT token."
+			},
+			"response": [
+				{
+					"code": 200,
+					"body": "{\n  \"id\": \"uuid\",\n  \"username\": \"testuser\",\n  \"email\": \"test@example.com\",\n  \"is_active\": true,\n  \"created_at\": \"2025-07-11T22:00:00Z\"\n}"
+				}
+			]
+		},
+		{
+			"name": "Create Deployment (Multipart Form)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"body": {
+					"mode": "formdata",
+					"formdata": [
+						{
+							"key": "target_ip",
+							"value": "172.235.15.164",
+							"type": "text",
+							"description": "Target server IP address"
+						},
+						{
+							"key": "ssh_username",
+							"value": "root",
+							"type": "text",
+							"description": "SSH username for target server"
+						},
+						{
+							"key": "ssh_password",
+							"value": "your-ssh-password",
+							"type": "text",
+							"description": "SSH password for target server"
+						},
+						{
+							"key": "github_repo_url",
+							"value": "https://github.com/your-username/your-repo",
+							"type": "text",
+							"description": "GitHub repository URL"
+						},
+						{
+							"key": "github_pat",
+							"value": "***REMOVED***",
+							"type": "text",
+							"description": "GitHub Personal Access Token"
+						},
+						{
+							"key": "github_branch",
+							"value": "main",
+							"type": "text",
+							"description": "GitHub branch to deploy"
+						},
+						{
+							"key": "port",
+							"value": "3000",
+							"type": "text",
+							"description": "Port for the container (1-65535)"
+						},
+						{
+							"key": "container_name",
+							"value": "my-app",
+							"type": "text",
+							"description": "Custom container name (optional)"
+						},
+						{
+							"key": "project_name",
+							"value": "my-project",
+							"type": "text",
+							"description": "Project name (optional)"
+						},
+						{
+							"key": "deployment_name",
+							"value": "Production Deployment",
+							"type": "text",
+							"description": "Deployment name (optional)"
+						},
+						{
+							"key": "env_file",
+							"type": "file",
+							"src": [],
+							"description": "Upload your .env file here (optional)"
+						}
+					]
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments"]
+				},
+				"description": "Create a new deployment using multipart form data. Upload your .env file for environment variables. This is the recommended approach for environment variable handling."
+			},
+			"response": []
+		},
+		{
+			"name": "Create Deployment (Legacy JSON)",
+			"request": {
+				"method": "POST",
+				"header": [
+					{
+						"key": "Content-Type",
+						"value": "application/json"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}"
+					}
+				],
+				"body": {
+					"mode": "raw",
+					"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your-ssh-password\",\n  \"github_repo_url\": \"https://github.com/your-username/your-repo\",\n  \"github_pat\": \"***REMOVED***\",\n  \"github_branch\": \"main\",\n  \"environment_vars\": \"NODE_ENV=production\\nPORT=3000\\nDATABASE_URL=postgresql://user:pass@localhost:5432/mydb\",\n  \"port\": 3000,\n  \"container_name\": \"my-app\",\n  \"project_name\": \"my-project\",\n  \"deployment_name\": \"Production Deployment\"\n}"
+				},
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments"]
+				},
+				"description": "Legacy JSON approach for creating deployments. Use the multipart form approach for better environment variable handling."
+			},
+			"response": []
+		},
+		{
+			"name": "Get Deployment",
+			"request": {
+				"method": "GET",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments", "{{deployment_id}}"]
+				},
+				"description": "Get deployment details by ID"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Deployment Logs (JSON)",
+			"request": {
+				"method": "GET",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/logs?limit=100",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments", "{{deployment_id}}", "logs"],
+					"query": [
+						{
+							"key": "limit",
+							"value": "100"
+						}
+					]
+				},
+				"description": "Get deployment logs as JSON response"
+			},
+			"response": []
+		},
+		{
+			"name": "Get Deployment Logs (SSE)",
+			"request": {
+				"method": "GET",
+				"header": [
+					{
+						"key": "Accept",
+						"value": "text/event-stream"
+					},
+					{
+						"key": "Authorization",
+						"value": "Bearer {{jwt_token}}"
+					}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/logs",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments", "{{deployment_id}}", "logs"]
+				},
+				"description": "Stream deployment logs using Server-Sent Events (SSE). This provides real-time log updates."
+			},
+			"response": []
+		},
+		{
+			"name": "Get Deployment Steps",
+			"request": {
+				"method": "GET",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments/{{deployment_id}}/steps",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments", "{{deployment_id}}", "steps"]
+				},
+				"description": "Get deployment steps and their status"
+			},
+			"response": []
+		},
+		{
+			"name": "List All Deployments",
+			"request": {
+				"method": "GET",
+				"header": [
+					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+				],
+				"url": {
+					"raw": "{{base_url}}/api/v1/deployments",
+					"host": ["{{base_url}}"],
+					"path": ["api", "v1", "deployments"]
+				},
+				"description": "Get all deployments"
+			},
+			"response": []
 		}
 	],
 	"variable": [
 		{
 			"key": "base_url",
 			"value": "http://localhost:8080",
-			"type": "string",
-			"description": "Base URL for the DeployKnot API server"
+			"type": "string"
 		},
 		{
 			"key": "deployment_id",
 			"value": "your-deployment-id-here",
+			"type": "string"
+		},
+		{
+			"key": "jwt_token",
+			"value": "",
 			"type": "string",
-			"description": "UUID of a deployment to use in requests"
+			"description": "Paste your JWT token here after login."
 		}
 	]
 } 

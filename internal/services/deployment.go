@@ -31,6 +31,12 @@ func NewDeploymentService(repo *database.Repository, queue *QueueService, logger
 
 // CreateDeployment creates a new deployment
 func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.CreateDeploymentRequest) (*models.DeploymentResponse, error) {
+	// Convert port string to int
+	port, err := req.GetPortAsInt()
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %w", err)
+	}
+
 	// Generate deployment ID
 	deploymentID := uuid.New()
 	now := time.Now()
@@ -38,7 +44,7 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 	// Generate container name if not provided
 	containerName := s.generateContainerName(deploymentID, req.ContainerName, req.ProjectName, req.DeploymentName)
 
-	// Create deployment record
+	// Create deployment record (no env vars stored in DB)
 	deployment := &models.Deployment{
 		ID:                   deploymentID,
 		CreatedAt:            now,
@@ -50,12 +56,11 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		GitHubRepoURL:        req.GitHubRepoURL,
 		GitHubPATEncrypted:   &req.GitHubPAT,
 		GitHubBranch:         req.GitHubBranch,
-		EnvironmentVars:      &req.EnvironmentVars,
-		AdditionalVars:       req.AdditionalVars,
-		Port:                 req.Port,
+		Port:                 port,
 		ContainerName:        &containerName,
 		ProjectName:          req.ProjectName,
 		DeploymentName:       req.DeploymentName,
+		AdditionalVars:       req.AdditionalVars,
 	}
 
 	// Save to database
@@ -66,28 +71,25 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 	// Create initial deployment steps
 	if err := s.createInitialSteps(deploymentID); err != nil {
 		s.logger.WithError(err).Error("Failed to create initial deployment steps")
-		// Don't fail the entire request if steps creation fails
 	}
 
 	// Enqueue deployment job
 	deploymentData := map[string]interface{}{
-		"target_ip":        req.TargetIP,
-		"ssh_username":     req.SSHUsername,
-		"ssh_password":     req.SSHPassword,
-		"github_repo_url":  req.GitHubRepoURL,
-		"github_pat":       req.GitHubPAT,
-		"github_branch":    req.GitHubBranch,
-		"environment_vars": req.EnvironmentVars,
-		"additional_vars":  req.AdditionalVars,
-		"port":             req.Port,
-		"container_name":   containerName,
-		"project_name":     req.ProjectName,
-		"deployment_name":  req.DeploymentName,
+		"target_ip":       req.TargetIP,
+		"ssh_username":    req.SSHUsername,
+		"ssh_password":    req.SSHPassword,
+		"github_repo_url": req.GitHubRepoURL,
+		"github_pat":      req.GitHubPAT,
+		"github_branch":   req.GitHubBranch,
+		"port":            port,
+		"container_name":  containerName,
+		"project_name":    req.ProjectName,
+		"deployment_name": req.DeploymentName,
+		"additional_vars": req.AdditionalVars,
 	}
 
 	if err := s.queue.EnqueueDeploymentJob(ctx, deploymentID, deploymentData); err != nil {
 		s.logger.WithError(err).Error("Failed to enqueue deployment job")
-		// Don't fail the entire request if queue fails
 	}
 
 	// Log the deployment creation
@@ -105,7 +107,100 @@ func (s *DeploymentService) CreateDeployment(ctx context.Context, req *models.Cr
 		TargetIP:       req.TargetIP,
 		GitHubRepoURL:  req.GitHubRepoURL,
 		GitHubBranch:   req.GitHubBranch,
-		Port:           req.Port,
+		Port:           port,
+		ContainerName:  &containerName,
+		CreatedAt:      now,
+		ProjectName:    req.ProjectName,
+		DeploymentName: req.DeploymentName,
+	}
+
+	return response, nil
+}
+
+// CreateDeploymentWithEnvFile creates a new deployment and handles env_file uploads
+func (s *DeploymentService) CreateDeploymentWithEnvFile(ctx context.Context, req *models.CreateDeploymentRequest, envFilePath string, userID uuid.UUID) (*models.DeploymentResponse, error) {
+	// Convert port string to int
+	port, err := req.GetPortAsInt()
+	if err != nil {
+		return nil, fmt.Errorf("invalid port: %w", err)
+	}
+
+	// Generate deployment ID
+	deploymentID := uuid.New()
+	now := time.Now()
+
+	// Generate container name if not provided
+	containerName := s.generateContainerName(deploymentID, req.ContainerName, req.ProjectName, req.DeploymentName)
+
+	// Create deployment record (no env vars stored in DB)
+	deployment := &models.Deployment{
+		ID:                   deploymentID,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+		Status:               models.DeploymentStatusPending,
+		TargetIP:             req.TargetIP,
+		SSHUsername:          req.SSHUsername,
+		SSHPasswordEncrypted: &req.SSHPassword,
+		GitHubRepoURL:        req.GitHubRepoURL,
+		GitHubPATEncrypted:   &req.GitHubPAT,
+		GitHubBranch:         req.GitHubBranch,
+		Port:                 port,
+		ContainerName:        &containerName,
+		ProjectName:          req.ProjectName,
+		DeploymentName:       req.DeploymentName,
+		AdditionalVars:       req.AdditionalVars,
+		UserID:               &userID,
+	}
+
+	// Save to database
+	if err := s.repo.CreateDeployment(deployment); err != nil {
+		return nil, fmt.Errorf("failed to create deployment: %w", err)
+	}
+
+	// Create initial deployment steps
+	if err := s.createInitialSteps(deploymentID); err != nil {
+		s.logger.WithError(err).Error("Failed to create initial deployment steps")
+	}
+
+	// Enqueue deployment job
+	deploymentData := map[string]interface{}{
+		"target_ip":       req.TargetIP,
+		"ssh_username":    req.SSHUsername,
+		"ssh_password":    req.SSHPassword,
+		"github_repo_url": req.GitHubRepoURL,
+		"github_pat":      req.GitHubPAT,
+		"github_branch":   req.GitHubBranch,
+		"port":            port,
+		"container_name":  containerName,
+		"project_name":    req.ProjectName,
+		"deployment_name": req.DeploymentName,
+		"additional_vars": req.AdditionalVars,
+	}
+	if envFilePath != "" {
+		deploymentData["env_file_path"] = envFilePath
+	}
+
+	if err := s.queue.EnqueueDeploymentJob(ctx, deploymentID, deploymentData); err != nil {
+		s.logger.WithError(err).Error("Failed to enqueue deployment job")
+	}
+
+	// Log the deployment creation
+	s.logger.WithFields(logrus.Fields{
+		"deployment_id": deploymentID,
+		"user_id":       userID,
+		"target_ip":     req.TargetIP,
+		"repo_url":      req.GitHubRepoURL,
+		"branch":        req.GitHubBranch,
+	}).Info("Deployment created and enqueued successfully")
+
+	// Return response
+	response := &models.DeploymentResponse{
+		ID:             deploymentID,
+		Status:         models.DeploymentStatusPending,
+		TargetIP:       req.TargetIP,
+		GitHubRepoURL:  req.GitHubRepoURL,
+		GitHubBranch:   req.GitHubBranch,
+		Port:           port,
 		ContainerName:  &containerName,
 		CreatedAt:      now,
 		ProjectName:    req.ProjectName,
@@ -261,8 +356,9 @@ func (s *DeploymentService) ValidateDeploymentRequest(req *models.CreateDeployme
 		return fmt.Errorf("github_branch is required")
 	}
 
-	if req.Port < 1 || req.Port > 65535 {
-		return fmt.Errorf("port must be between 1 and 65535")
+	// Validate port using the new conversion method
+	if _, err := req.GetPortAsInt(); err != nil {
+		return fmt.Errorf("port validation failed: %w", err)
 	}
 
 	return nil
@@ -312,4 +408,34 @@ func sanitizeContainerName(name string) string {
 	}
 
 	return sanitized
+}
+
+// GetDeploymentsByUser gets deployments for a specific user
+func (s *DeploymentService) GetDeploymentsByUser(ctx context.Context, userID uuid.UUID, limit, offset int) ([]*models.DeploymentResponse, error) {
+	deployments, err := s.repo.GetDeploymentsByUserID(userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get deployments by user: %w", err)
+	}
+
+	var responses []*models.DeploymentResponse
+	for _, deployment := range deployments {
+		response := &models.DeploymentResponse{
+			ID:             deployment.ID,
+			Status:         deployment.Status,
+			TargetIP:       deployment.TargetIP,
+			GitHubRepoURL:  deployment.GitHubRepoURL,
+			GitHubBranch:   deployment.GitHubBranch,
+			Port:           deployment.Port,
+			ContainerName:  deployment.ContainerName,
+			CreatedAt:      deployment.CreatedAt,
+			StartedAt:      deployment.StartedAt,
+			CompletedAt:    deployment.CompletedAt,
+			ErrorMessage:   deployment.ErrorMessage,
+			ProjectName:    deployment.ProjectName,
+			DeploymentName: deployment.DeploymentName,
+		}
+		responses = append(responses, response)
+	}
+
+	return responses, nil
 }
