@@ -31,7 +31,7 @@ curl --location 'http://localhost:8080/api/v1/deployments' \
 --form 'ssh_username="root"' \
 --form 'ssh_password="your-password"' \
 --form 'github_repo_url="https://github.com/your-username/your-repo"' \
---form 'github_pat="***REMOVED***"' \
+--form 'github_pat="ghp_your-github-pat"' \
 --form 'github_branch="main"' \
 --form 'port="3000"' \
 --form 'container_name="my-app"' \

@@ -105,9 +105,9 @@
 				"body": {
 					"mode": "formdata",
 					"formdata": [
-						{ "key": "target_ip", "value": "172.235.15.164", "type": "text" },
+						{ "key": "target_ip", "value": "IP", "type": "text" },
 						{ "key": "ssh_username", "value": "root", "type": "text" },
-						{ "key": "ssh_password", "value": "Webknot@1234", "type": "text" },
+						{ "key": "ssh_password", "value": "<pwd>", "type": "text" },
 						{ "key": "github_repo_url", "value": "https://github.com/rohanreddymelachervu/DeployKnot-test", "type": "text" },
 						{ "key": "github_pat", "value": "PAT", "type": "text" },
 						{ "key": "github_branch", "value": "main", "type": "text" },
@@ -145,7 +145,7 @@
 				],
 				"body": {
 					"mode": "raw",
-					"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your-ssh-password\",\n  \"github_repo_url\": \"https://github.com/your-username/your-repo\",\n  \"github_pat\": \"***REMOVED***\",\n  \"github_branch\": \"main\",\n  \"environment_vars\": \"NODE_ENV=production\\nPORT=3000\\nDATABASE_URL=postgresql://user:pass@localhost:5432/mydb\",\n  \"port\": 3000,\n  \"container_name\": \"my-app\",\n  \"project_name\": \"my-project\",\n  \"deployment_name\": \"Production Deployment\"\n}"
+					"raw": "{\n  \"target_ip\": \"172.235.15.164\",\n  \"ssh_username\": \"root\",\n  \"ssh_password\": \"your-ssh-password\",\n  \"github_repo_url\": \"https://github.com/your-username/your-repo\",\n  \"github_pat\": \"ghp_your-github-pat\",\n  \"github_branch\": \"main\",\n  \"environment_vars\": \"NODE_ENV=production\\nPORT=3000\\nDATABASE_URL=postgresql://user:pass@localhost:5432/mydb\",\n  \"port\": 3000,\n  \"container_name\": \"my-app\",\n  \"project_name\": \"my-project\",\n  \"deployment_name\": \"Production Deployment\"\n}"
 				},
 				"url": {
 					"raw": "{{base_url}}/api/v1/deployments",
