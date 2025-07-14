@@ -83,7 +83,7 @@ For detailed setup instructions, see [LOCAL_SETUP.md](LOCAL_SETUP.md).
 
 ### Deployments
 - `GET /api/v1/deployments` - List deployments (authenticated)
-- `POST /api/v1/deployments` - Create deployment (authenticated)
+- `POST /api/v1/deployments` - Create deployment with environment variables (authenticated, multipart form)
 - `GET /api/v1/deployments/:id` - Get deployment details (authenticated)
 - `GET /api/v1/deployments/:id/logs` - Stream deployment logs (SSE)
 - `GET /api/v1/deployments/:id/steps` - Get deployment steps (authenticated)
@@ -125,6 +125,68 @@ JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 ```
 
 For detailed environment variable documentation, see [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md).
+
+## Environment Variable Management
+
+DeployKnot supports uploading environment variables during deployment. The system will:
+
+1. **Upload**: Accept `.env` files via multipart form upload
+2. **Process**: Copy the environment file to the target server
+3. **Inject**: Pass environment variables to Docker containers using `--env-file`
+4. **Verify**: Ensure environment variables are available in the running container
+
+### Example Usage
+
+```bash
+curl -X POST "http://localhost:8080/api/v1/deployments" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "target_ip=YOUR_SERVER_IP" \
+  -F "ssh_username=root" \
+  -F "ssh_password=YOUR_PASSWORD" \
+  -F "github_repo_url=https://github.com/user/repo" \
+  -F "github_pat=YOUR_GITHUB_TOKEN" \
+  -F "github_branch=main" \
+  -F "port=3000" \
+  -F "container_name=my-app" \
+  -F "project_name=my-project" \
+  -F "deployment_name=Production" \
+  -F "env_file=@/path/to/your/.env"
+```
+
+### Environment File Format
+
+Your `.env` file should contain key-value pairs:
+
+```env
+NODE_ENV=production
+PORT=3000
+DATABASE_URL=postgresql://user:pass@localhost:5432/mydb
+API_KEY=your-api-key
+DEBUG=false
+```
+
+## Example: Deploy with Environment File (Correct Curl)
+
+```
+curl --location 'http://localhost:8080/api/v1/deployments' \
+--header 'Authorization: Bearer <YOUR_TOKEN>' \
+-F target_ip=172.235.15.164 \
+-F ssh_username=root \
+-F ssh_password=Webknot@1234 \
+-F github_repo_url=https://github.com/rohanreddymelachervu/DeployKnot-test \
+-F github_pat=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 \
+-F github_branch=main \
+-F port=3000 \
+-F container_name=my-app-test \
+-F project_name=my-project-test \
+-F deployment_name="Production Deployment" \
+-F env_file=@/absolute/path/to/sample.env
+```
+
+**Troubleshooting:**
+- Do NOT quote the `-F` values (e.g. `-F target_ip=...`, not `-F 'target_ip="..."'`).
+- Only use quotes if the value contains spaces (e.g. `deployment_name`).
+- If the env file is not uploaded, the container will not have your environment variables.
 
 ## Project Structure
 

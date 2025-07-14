@@ -92,86 +92,37 @@
 			]
 		},
 		{
-			"name": "Create Deployment (Multipart Form)",
+			"name": "Create Deployment (with env file)",
 			"request": {
 				"method": "POST",
 				"header": [
-					{"key": "Authorization", "value": "Bearer {{jwt_token}}"}
+					{
+						"key": "Authorization",
+						"value": "Bearer <YOUR_TOKEN>",
+						"type": "text"
+					}
 				],
 				"body": {
 					"mode": "formdata",
 					"formdata": [
-						{
-							"key": "target_ip",
-							"value": "172.235.15.164",
-							"type": "text",
-							"description": "Target server IP address"
-						},
-						{
-							"key": "ssh_username",
-							"value": "root",
-							"type": "text",
-							"description": "SSH username for target server"
-						},
-						{
-							"key": "ssh_password",
-							"value": "your-ssh-password",
-							"type": "text",
-							"description": "SSH password for target server"
-						},
-						{
-							"key": "github_repo_url",
-							"value": "https://github.com/your-username/your-repo",
-							"type": "text",
-							"description": "GitHub repository URL"
-						},
-						{
-							"key": "github_pat",
-							"value": "***REMOVED***",
-							"type": "text",
-							"description": "GitHub Personal Access Token"
-						},
-						{
-							"key": "github_branch",
-							"value": "main",
-							"type": "text",
-							"description": "GitHub branch to deploy"
-						},
-						{
-							"key": "port",
-							"value": "3000",
-							"type": "text",
-							"description": "Port for the container (1-65535)"
-						},
-						{
-							"key": "container_name",
-							"value": "my-app",
-							"type": "text",
-							"description": "Custom container name (optional)"
-						},
-						{
-							"key": "project_name",
-							"value": "my-project",
-							"type": "text",
-							"description": "Project name (optional)"
-						},
-						{
-							"key": "deployment_name",
-							"value": "Production Deployment",
-							"type": "text",
-							"description": "Deployment name (optional)"
-						},
-						{
-							"key": "env_file",
-							"type": "file",
-							"src": [],
-							"description": "Upload your .env file here (optional)"
-						}
+						{ "key": "target_ip", "value": "172.235.15.164", "type": "text" },
+						{ "key": "ssh_username", "value": "root", "type": "text" },
+						{ "key": "ssh_password", "value": "Webknot@1234", "type": "text" },
+						{ "key": "github_repo_url", "value": "https://github.com/rohanreddymelachervu/DeployKnot-test", "type": "text" },
+						{ "key": "github_pat", "value": "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", "type": "text" },
+						{ "key": "github_branch", "value": "main", "type": "text" },
+						{ "key": "port", "value": "3000", "type": "text" },
+						{ "key": "container_name", "value": "my-app-test", "type": "text" },
+						{ "key": "project_name", "value": "my-project-test", "type": "text" },
+						{ "key": "deployment_name", "value": "Production Deployment", "type": "text" },
+						{ "key": "env_file", "src": "<ABSOLUTE_PATH_TO_SAMPLE.ENV>", "type": "file" }
 					]
 				},
 				"url": {
-					"raw": "{{base_url}}/api/v1/deployments",
-					"host": ["{{base_url}}"],
+					"raw": "http://localhost:8080/api/v1/deployments",
+					"protocol": "http",
+					"host": ["localhost"],
+					"port": "8080",
 					"path": ["api", "v1", "deployments"]
 				},
 				"description": "Create a new deployment using multipart form data. Upload your .env file for environment variables. This is the recommended approach for environment variable handling."

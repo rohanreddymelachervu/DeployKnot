@@ -433,6 +433,61 @@ curl -X POST http://localhost:8080/api/v1/deployments \
    - Create Deployment: `POST /api/v1/deployments`
    - Get Deployments: `GET /api/v1/deployments`
 
+### Testing Environment Variable Uploads
+
+1. **Create a test environment file**:
+   ```bash
+   cat > test.env << EOF
+   NODE_ENV=production
+   PORT=3000
+   DATABASE_URL=postgresql://user:pass@localhost:5432/mydb
+   API_KEY=test-api-key
+   DEBUG=false
+   EOF
+   ```
+
+2. **Test deployment with environment variables**:
+   ```bash
+   # First, register a user and get a JWT token
+   curl -X POST "http://localhost:8080/api/v1/auth/register" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "username": "testuser",
+       "email": "test@example.com",
+       "password": "password123"
+     }'
+
+   # Login to get JWT token
+   curl -X POST "http://localhost:8080/api/v1/auth/login" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "username": "testuser",
+       "password": "password123"
+     }'
+
+   # Use the JWT token to create a deployment with environment variables
+   curl -X POST "http://localhost:8080/api/v1/deployments" \
+     -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+     -F "target_ip=YOUR_SERVER_IP" \
+     -F "ssh_username=root" \
+     -F "ssh_password=YOUR_PASSWORD" \
+     -F "github_repo_url=https://github.com/user/repo" \
+     -F "github_pat=YOUR_GITHUB_TOKEN" \
+     -F "github_branch=main" \
+     -F "port=3000" \
+     -F "container_name=test-app" \
+     -F "project_name=test-project" \
+     -F "deployment_name=Test Deployment" \
+     -F "env_file=@test.env"
+   ```
+
+3. **Verify environment variables in container**:
+   ```bash
+   # SSH to your target server and check the container
+   ssh root@YOUR_SERVER_IP
+   docker exec CONTAINER_ID env | grep -E "(NODE_ENV|PORT|DATABASE_URL|API_KEY|DEBUG)"
+   ```
+
 ## Development Workflow
 
 ### Running Tests

@@ -257,10 +257,10 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 		w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for cleanup: %w", err)
 	}
+	defer cleanupSession.Close()
 
 	cleanupCmd := "rm -rf /tmp/deployknot-app"
 	cleanupOutput, err := cleanupSession.CombinedOutput(cleanupCmd)
-	cleanupSession.Close()
 	if err != nil {
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Cleanup warning: %v, output: %s", err, string(cleanupOutput)), "git_cleanup", intPtr(1))
 	} else {
@@ -274,6 +274,7 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 		w.updateDeploymentStep(ctx, deploymentID, 1, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
+	defer session.Close()
 
 	// Normalize repository URL to the expected owner/repo format
 	normalized := normalizeRepoURL(repoURL)
@@ -286,7 +287,6 @@ func (w *Worker) cloneRepository(ctx context.Context, deploymentID uuid.UUID, ss
 
 	// Execute command
 	output, err := session.CombinedOutput(cloneCmd)
-	session.Close() // Close immediately after use
 	if err != nil {
 		errorMsg := fmt.Sprintf("Git clone failed: %v, output: %s", err, string(output))
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "git_clone", intPtr(1))
@@ -319,17 +319,67 @@ func (w *Worker) buildDockerImage(ctx context.Context, deploymentID uuid.UUID, s
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name: %s", containerName), "docker_build", intPtr(2))
 	}
 
+	// Comprehensive cleanup to ensure fresh deployment
+	// Step 1: Force remove existing container
+	removeContainerSession, err := sshClient.NewSession()
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to create session for container removal")
+	} else {
+		defer removeContainerSession.Close()
+		cleanupCmd := fmt.Sprintf("docker rm -f %s 2>/dev/null || true", containerName)
+		cleanupOutput, err := removeContainerSession.CombinedOutput(cleanupCmd)
+		if err != nil {
+			w.logger.WithError(err).Warn("Failed to remove existing container")
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Remove existing container warning: %v, output: %s", err, string(cleanupOutput)), "docker_rm", intPtr(2))
+		} else {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Existing container removed successfully", "docker_rm", intPtr(2))
+		}
+	}
+
+	// Step 2: Remove container image to force rebuild
+	removeImageSession, err := sshClient.NewSession()
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to create session for image removal")
+	} else {
+		defer removeImageSession.Close()
+		removeImageCmd := fmt.Sprintf("docker rmi %s:latest 2>/dev/null || true", containerName)
+		removeImageOutput, err := removeImageSession.CombinedOutput(removeImageCmd)
+		if err != nil {
+			w.logger.WithError(err).Warn("Failed to remove existing image")
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Remove existing image warning: %v, output: %s", err, string(removeImageOutput)), "docker_rmi", intPtr(2))
+		} else {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Existing image removed successfully", "docker_rmi", intPtr(2))
+		}
+	}
+
+	// Step 3: Clean up any dangling images and containers
+	pruneSession, err := sshClient.NewSession()
+	if err != nil {
+		w.logger.WithError(err).Warn("Failed to create session for Docker prune")
+	} else {
+		defer pruneSession.Close()
+		pruneCmd := "docker system prune -f"
+		pruneOutput, err := pruneSession.CombinedOutput(pruneCmd)
+		if err != nil {
+			w.logger.WithError(err).Warn("Failed to prune Docker system")
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Docker prune warning: %v, output: %s", err, string(pruneOutput)), "docker_prune", intPtr(2))
+		} else {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Docker system cleaned successfully", "docker_prune", intPtr(2))
+		}
+	}
+	time.Sleep(2 * time.Second)
+
 	session, err := sshClient.NewSession()
 	if err != nil {
 		errorMsg := "Failed to create SSH session for Docker build"
 		w.updateDeploymentStep(ctx, deploymentID, 2, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
+	defer session.Close()
 
 	// Build Docker image with the container name as the image tag
 	buildCmd := fmt.Sprintf("cd /tmp/deployknot-app && docker build -t %s:latest .", containerName)
 	output, err := session.CombinedOutput(buildCmd)
-	session.Close() // Close immediately after use
 	if err != nil {
 		errorMsg := fmt.Sprintf("Docker build failed: %v, output: %s", err, string(output))
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_build", intPtr(2))
@@ -369,11 +419,11 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for stop: %w", err)
 	}
+	defer stopSession.Close()
 
 	// More aggressive cleanup - stop, remove, and also remove any containers with the same name
 	stopCmd := fmt.Sprintf("docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker ps -a --filter name=%s --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", containerName, containerName, containerName)
 	stopOutput, err := stopSession.CombinedOutput(stopCmd)
-	stopSession.Close() // Close immediately after use
 	if err != nil {
 		w.logger.WithError(err).Warn("Failed to stop existing container")
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Stop existing container warning: %v, output: %s", err, string(stopOutput)), "docker_stop", intPtr(3))
@@ -391,6 +441,7 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for run: %w", err)
 	}
+	defer runSession.Close()
 
 	// First check if Docker is available
 	dockerCheckSession, err := sshClient.NewSession()
@@ -399,10 +450,10 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for docker check: %w", err)
 	}
+	defer dockerCheckSession.Close()
 
 	dockerCheckCmd := "docker --version"
 	dockerCheckOutput, err := dockerCheckSession.CombinedOutput(dockerCheckCmd)
-	dockerCheckSession.Close()
 	if err != nil {
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Docker not available: %v, output: %s", err, string(dockerCheckOutput)), "docker_check", intPtr(3))
 		return fmt.Errorf("docker not available: %w, output: %s", err, string(dockerCheckOutput))
@@ -424,6 +475,7 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 			w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 			return fmt.Errorf("failed to create SSH session for env file: %w", err)
 		}
+		defer envSession.Close()
 
 		// Process and validate environment variables
 		processedEnvVars := w.processEnvironmentVariables(envVars)
@@ -431,7 +483,6 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 		// Create .env file with proper formatting
 		envCmd := fmt.Sprintf("cat > %s << 'EOF'\n%s\nEOF", envFilePath, processedEnvVars)
 		envOutput, err := envSession.CombinedOutput(envCmd)
-		envSession.Close()
 		if err != nil {
 			errorMsg := fmt.Sprintf("Failed to create .env file: %v, output: %s", err, string(envOutput))
 			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "env_setup", intPtr(3))
@@ -446,10 +497,10 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 			w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 			return fmt.Errorf("failed to create SSH session for env verification: %w", err)
 		}
+		defer verifySession.Close()
 
 		verifyCmd := fmt.Sprintf("ls -la %s && echo '--- ENV FILE CONTENT ---' && cat %s", envFilePath, envFilePath)
 		verifyOutput, err := verifySession.CombinedOutput(verifyCmd)
-		verifySession.Close()
 		if err != nil {
 			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Env file verification warning: %v, output: %s", err, string(verifyOutput)), "env_verify", intPtr(3))
 		} else {
@@ -468,8 +519,6 @@ func (w *Worker) runDockerContainer(ctx context.Context, deploymentID uuid.UUID,
 	}
 
 	runOutput, err := runSession.CombinedOutput(runCmd)
-	runSession.Close() // Close immediately after use
-
 	if err != nil {
 		errorMsg := fmt.Sprintf("Docker run failed: %v, output: %s", err, string(runOutput))
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_run", intPtr(3))
@@ -547,11 +596,11 @@ func (w *Worker) healthCheck(ctx context.Context, deploymentID uuid.UUID, sshCli
 		w.updateDeploymentStep(ctx, deploymentID, 4, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session: %w", err)
 	}
+	defer session.Close()
 
 	// Check if container is running
 	checkCmd := fmt.Sprintf("docker ps --filter name=%s --format 'table {{.Names}}\t{{.Status}}'", containerName)
 	output, err := session.CombinedOutput(checkCmd)
-	session.Close() // Close immediately after use
 	if err != nil {
 		errorMsg := fmt.Sprintf("Health check failed: %v, output: %s", err, string(output))
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "health_check", intPtr(4))
@@ -615,24 +664,46 @@ func (w *Worker) runDockerContainerWithEnvFile(ctx context.Context, deploymentID
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Using generated container name: %s", containerName), "docker_run", intPtr(3))
 	}
 
-	// Stop and remove existing container if running (reuse existing logic)
-	stopSession, err := sshClient.NewSession()
+	// Verify the env file exists and has content
+	checkEnvSession, err := sshClient.NewSession()
 	if err != nil {
-		errorMsg := "Failed to create SSH session for stop"
+		errorMsg := "Failed to create SSH session for env file check"
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
-		return fmt.Errorf("failed to create SSH session for stop: %w", err)
+		return fmt.Errorf("failed to create SSH session for env file check: %w", err)
 	}
-	stopCmd := fmt.Sprintf("docker stop %s 2>/dev/null || true && docker rm %s 2>/dev/null || true && docker ps -a --filter name=%s --format '{{.Names}}' | xargs -r docker rm -f 2>/dev/null || true", containerName, containerName, containerName)
-	stopOutput, err := stopSession.CombinedOutput(stopCmd)
-	stopSession.Close()
+	defer checkEnvSession.Close()
+
+	remoteEnvPath := "/tmp/deployknot-uploaded.env"
+	checkEnvCmd := fmt.Sprintf("ls -la %s && echo '---ENV FILE CONTENT---' && cat %s", remoteEnvPath, remoteEnvPath)
+	checkEnvOutput, err := checkEnvSession.CombinedOutput(checkEnvCmd)
 	if err != nil {
-		w.logger.WithError(err).Warn("Failed to stop existing container")
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", fmt.Sprintf("Stop existing container warning: %v, output: %s", err, string(stopOutput)), "docker_stop", intPtr(3))
-	} else {
-		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Existing container cleanup completed: %s", string(stopOutput)), "docker_stop", intPtr(3))
+		errorMsg := fmt.Sprintf("Env file check failed: %v, output: %s", err, string(checkEnvOutput))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "env_check", intPtr(3))
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("env file check failed: %w, output: %s", err, string(checkEnvOutput))
 	}
 
-	time.Sleep(2 * time.Second)
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Env file verified: %s", string(checkEnvOutput)), "env_check", intPtr(3))
+
+	// Check if the Docker image exists
+	checkImageSession, err := sshClient.NewSession()
+	if err != nil {
+		errorMsg := "Failed to create SSH session for image check"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("failed to create SSH session for image check: %w", err)
+	}
+	defer checkImageSession.Close()
+
+	checkImageCmd := fmt.Sprintf("docker images %s:latest --format '{{.Repository}}:{{.Tag}}'", containerName)
+	checkImageOutput, err := checkImageSession.CombinedOutput(checkImageCmd)
+	if err != nil || len(strings.TrimSpace(string(checkImageOutput))) == 0 {
+		errorMsg := fmt.Sprintf("Docker image not found: %s:latest", containerName)
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "image_check", intPtr(3))
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("docker image not found: %s:latest", containerName)
+	}
+
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker image found: %s", string(checkImageOutput)), "image_check", intPtr(3))
 
 	// Run new container with --env-file
 	runSession, err := sshClient.NewSession()
@@ -641,18 +712,55 @@ func (w *Worker) runDockerContainerWithEnvFile(ctx context.Context, deploymentID
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
 		return fmt.Errorf("failed to create SSH session for run: %w", err)
 	}
-	remoteEnvPath := "/tmp/deployknot-uploaded.env"
-	runCmd := fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file %s %s:latest", containerName, port, port, remoteEnvPath, containerName)
-	runOutput, err := runSession.CombinedOutput(runCmd)
-	runSession.Close()
+	defer runSession.Close()
+
+	// Copy env file to a Docker-accessible location
+	copyEnvCmd := fmt.Sprintf("cp %s ./deployknot.env", remoteEnvPath)
+	_, err = runSession.CombinedOutput(copyEnvCmd)
 	if err != nil {
-		errorMsg := fmt.Sprintf("Docker run failed: %v, output: %s", err, string(runOutput))
+		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", fmt.Sprintf("Failed to copy env file: %v", err), "env_copy", intPtr(3))
+		errorMsg := fmt.Sprintf("Failed to copy env file: %v", err)
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("failed to copy env file: %w", err)
+	}
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", "Env file copied successfully", "env_copy", intPtr(3))
+
+	// Build the docker run command with the copied env file
+	runCmd := fmt.Sprintf("docker run -d --name %s -p %d:%d --env-file ./deployknot.env %s:latest", containerName, port, port, containerName)
+
+	// Log the command being executed
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Executing Docker run command: %s", runCmd), "docker_run", intPtr(3))
+
+	// Execute the actual docker run command with detailed error capture
+	runSession, err = sshClient.NewSession()
+	if err != nil {
+		errorMsg := "Failed to create SSH session for docker run"
+		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
+		return fmt.Errorf("failed to create SSH session for docker run: %w", err)
+	}
+	defer runSession.Close()
+
+	runOutput, err := runSession.CombinedOutput(runCmd)
+	if err != nil {
+		errorMsg := fmt.Sprintf("Docker run failed: %v", err)
 		w.deploymentService.AddDeploymentLog(ctx, deploymentID, "error", errorMsg, "docker_run", intPtr(3))
 		w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusFailed, &errorMsg)
-		return fmt.Errorf("docker run failed: %w, output: %s", err, string(runOutput))
+		return fmt.Errorf("docker run failed: %w", err)
 	}
 
-	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker container started successfully: %s", string(runOutput)), "docker_run", intPtr(3))
+	containerID := strings.TrimSpace(string(runOutput))
+	w.deploymentService.AddDeploymentLog(ctx, deploymentID, "info", fmt.Sprintf("Docker container started successfully with ID: %s", containerID), "docker_run", intPtr(3))
+
+	// Verify the container is running
+	verifySession, err := sshClient.NewSession()
+	if err == nil {
+		checkRunningCmd := fmt.Sprintf("docker ps --filter id=%s --format '{{.Names}} {{.Status}}'", containerID)
+		_, err = verifySession.CombinedOutput(checkRunningCmd)
+		if err != nil {
+			w.deploymentService.AddDeploymentLog(ctx, deploymentID, "warn", "Container verification failed", "container_check", intPtr(3))
+		}
+		verifySession.Close()
+	}
 
 	// Update step status to completed
 	if err := w.updateDeploymentStep(ctx, deploymentID, 3, models.DeploymentStatusCompleted, nil); err != nil {
