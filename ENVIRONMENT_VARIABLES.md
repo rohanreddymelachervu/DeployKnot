@@ -1,34 +1,63 @@
-# Enhanced Environment Variables in DeployKnot
+# Environment Variables in DeployKnot
 
 ## Overview
 
-DeployKnot now supports enhanced environment variable handling with proper `.env` file creation and Docker `--env-file` integration. This replaces the previous basic string-based approach with a more robust and secure solution.
+DeployKnot supports comprehensive environment variable management for both application configuration and deployment targets. This document covers all environment variables used throughout the application.
 
-## Features
+## Application Environment Variables
 
-### ✅ Enhanced Environment Variable Processing
-- **Automatic .env file creation** with unique paths per deployment
-- **Comment filtering** - automatically removes lines starting with `#`
-- **Quote handling** - properly processes single and double quotes
-- **Validation** - ensures proper KEY=VALUE format
-- **Empty line filtering** - removes blank lines for cleaner files
+### Server Configuration
 
-### ✅ Docker Integration
-- **`--env-file` support** - uses Docker's native environment file feature
-- **Unique file paths** - each deployment gets its own environment file
-- **Verification** - confirms file creation and content
-- **Cleanup** - environment files are created in `/tmp/` for easy cleanup
+```env
+# Server Configuration
+SERVER_PORT=8080                    # Port for the HTTP server
+SERVER_READ_TIMEOUT=30s            # HTTP read timeout
+SERVER_WRITE_TIMEOUT=30s           # HTTP write timeout
+SERVER_IDLE_TIMEOUT=60s            # HTTP idle timeout
+```
 
-### ✅ Security & Validation
-- **Type-safe extraction** - robust handling of different data types
-- **Input validation** - ensures proper environment variable format
-- **Error handling** - comprehensive error reporting and logging
+### Database Configuration
 
-## API Usage
+```env
+# Database Configuration
+DB_HOST=localhost                   # PostgreSQL host
+DB_PORT=5432                       # PostgreSQL port
+DB_USER=postgres                   # Database username
+DB_PASSWORD=password               # Database password
+DB_NAME=deployknot                # Database name
+DB_SSLMODE=disable                # SSL mode (disable/require/verify-ca/verify-full)
+DB_SCHEMA=deploy_knot             # Database schema (important!)
+```
+
+### Redis Configuration
+
+```env
+# Redis Configuration
+REDIS_HOST=localhost               # Redis host
+REDIS_PORT=6379                   # Redis port
+REDIS_PASSWORD=                   # Redis password (empty for local)
+REDIS_DB=0                        # Redis database number
+```
+
+### Logging Configuration
+
+```env
+# Logging Configuration
+LOG_LEVEL=info                    # Log level (debug, info, warn, error)
+```
+
+### JWT Configuration
+
+```env
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
+```
+
+## Deployment Environment Variables
 
 ### Environment Variables Format
 
-The `environment_vars` field accepts a string in `.env` file format:
+The `environment_vars` field accepts a string in `.env` file format for deployment targets:
 
 ```json
 {
@@ -115,11 +144,12 @@ EMAIL_PASS=email-password-here
 ```bash
 curl -X POST http://localhost:8080/api/v1/deployments \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{
-    "target_ip": "172.235.15.164",
+    "target_ip": "192.168.1.100",
     "ssh_username": "root",
     "ssh_password": "your-ssh-password",
-    "github_repo_url": "https://github.com/rohanreddymelachervu/DeployKnot-test",
+    "github_repo_url": "https://github.com/example/repo",
     "github_pat": "your-github-pat",
     "github_branch": "main",
     "environment_vars": "NODE_ENV=production\nPORT=3000\nDATABASE_URL=postgresql://user:pass@localhost:5432/db\nAPI_KEY=sk-1234567890abcdef",
@@ -135,11 +165,12 @@ curl -X POST http://localhost:8080/api/v1/deployments \
 ```bash
 curl -X POST http://localhost:8080/api/v1/deployments \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
   -d '{
-    "target_ip": "172.235.15.164",
+    "target_ip": "192.168.1.100",
     "ssh_username": "root",
     "ssh_password": "your-ssh-password",
-    "github_repo_url": "https://github.com/rohanreddymelachervu/DeployKnot-test",
+    "github_repo_url": "https://github.com/example/repo",
     "github_pat": "your-github-pat",
     "github_branch": "main",
     "environment_vars": "# Production environment variables\nNODE_ENV=production\nPORT=3000\n\n# Database configuration\nDATABASE_URL=postgresql://user:pass@localhost:5432/db\n\n# API Keys\nAPI_KEY=sk-1234567890abcdef\n\n# Redis configuration\nREDIS_URL=redis://localhost:6379\n\n# AWS Configuration\nAWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nAWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\nAWS_REGION=us-west-2",
@@ -148,6 +179,24 @@ curl -X POST http://localhost:8080/api/v1/deployments \
     "project_name": "my-project",
     "deployment_name": "complex-env-deploy"
   }'
+```
+
+### Environment File Upload
+
+```bash
+curl -X POST http://localhost:8080/api/v1/deployments \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -F "target_ip=192.168.1.100" \
+  -F "ssh_username=root" \
+  -F "ssh_password=your-ssh-password" \
+  -F "github_repo_url=https://github.com/example/repo" \
+  -F "github_pat=your-github-pat" \
+  -F "github_branch=main" \
+  -F "port=3000" \
+  -F "container_name=my-app" \
+  -F "project_name=my-project" \
+  -F "deployment_name=production-deploy" \
+  -F "env_file=@/path/to/your/.env"
 ```
 
 ## How It Works
@@ -179,6 +228,38 @@ The Docker container is started with:
 docker run -d --name {container-name} -p {port}:{port} --env-file /tmp/deployknot-env-{deployment-id}.env {image-name}:latest
 ```
 
+## Database Schema Requirements
+
+### PostgreSQL Schema Setup
+
+The application requires the `deploy_knot` schema to be created in PostgreSQL:
+
+```sql
+-- Create schema
+CREATE SCHEMA IF NOT EXISTS deploy_knot;
+
+-- Verify schema exists
+SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'deploy_knot';
+```
+
+### Docker Setup
+
+When using Docker for PostgreSQL, ensure the schema is created:
+
+```bash
+# Start PostgreSQL
+docker run --name postgres-deployknot \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=deployknot \
+  -e POSTGRES_USER=postgres \
+  -p 5432:5432 \
+  -d postgres:15-alpine
+
+# Create schema (wait for PostgreSQL to start)
+sleep 5
+docker exec postgres-deployknot psql -U postgres -d deployknot -c "CREATE SCHEMA IF NOT EXISTS deploy_knot;"
+```
+
 ## Monitoring & Logs
 
 ### Environment Variable Logs
@@ -200,7 +281,7 @@ API_KEY=sk-1234567890abcdef
 Monitor environment variable processing through deployment logs:
 
 ```bash
-curl http://localhost:8080/api/v1/deployments/{deployment-id}/logs
+curl -N http://localhost:8080/api/v1/deployments/{deployment-id}/logs
 ```
 
 ## Best Practices
@@ -236,6 +317,11 @@ curl http://localhost:8080/api/v1/deployments/{deployment-id}/logs
    AWS_REGION=us-west-2
    ```
 
+5. **Always set DB_SCHEMA=deploy_knot**
+   ```
+   DB_SCHEMA=deploy_knot
+   ```
+
 ### ❌ Don'ts
 
 1. **Don't include sensitive data in comments**
@@ -249,65 +335,65 @@ curl http://localhost:8080/api/v1/deployments/{deployment-id}/logs
    # Good: MY_VAR=value
    ```
 
-3. **Don't forget to escape quotes properly in JSON**
-   ```json
-   {
-     "environment_vars": "MESSAGE=\"Hello, World!\""
-   }
+3. **Don't forget to create the deploy_knot schema**
+   ```sql
+   -- Always run this for new databases
+   CREATE SCHEMA IF NOT EXISTS deploy_knot;
    ```
 
 ## Troubleshooting
 
 ### Common Issues
 
-1. **Environment variables not being set**
-   - Check the deployment logs for environment processing errors
-   - Verify the .env file was created successfully
-   - Ensure proper KEY=VALUE format
+1. **Database Schema Not Found**
+   ```bash
+   # Error: schema "deploy_knot" does not exist
+   # Solution: Create the schema
+   psql -h localhost -U postgres -d deployknot -c "CREATE SCHEMA IF NOT EXISTS deploy_knot;"
+   ```
 
-2. **Quotes not being handled correctly**
-   - The system automatically removes quotes from values
-   - Use proper JSON escaping for quotes in the API request
+2. **Environment Variables Not Applied**
+   - Check the deployment logs for environment file creation
+   - Verify the environment variables format
+   - Ensure the target container supports environment variables
 
-3. **Comments not being filtered**
-   - Comments starting with `#` are automatically removed
-   - Check that comments are on their own lines
+3. **Database Connection Failed**
+   - Verify DB_HOST, DB_PORT, DB_USER, DB_PASSWORD
+   - Check if PostgreSQL is running
+   - Ensure DB_SCHEMA=deploy_knot is set
 
-### Debug Commands
+4. **Redis Connection Failed**
+   - Verify REDIS_HOST, REDIS_PORT, REDIS_PASSWORD
+   - Check if Redis is running
+   - Test connection: `redis-cli -h localhost -p 6379 ping`
 
-Check environment file creation:
+### Debug Environment Variables
+
 ```bash
-# On the target server
-ls -la /tmp/deployknot-env-*
-cat /tmp/deployknot-env-{deployment-id}.env
+# Check application environment variables
+echo $DATABASE_URL
+echo $REDIS_URL
+echo $JWT_SECRET
+
+# Check deployment environment variables in logs
+curl -N http://localhost:8080/api/v1/deployments/{deployment-id}/logs | grep -i "environment"
 ```
-
-Verify Docker container environment:
-```bash
-# On the target server
-docker exec {container-name} env
-```
-
-## Migration from Old Format
-
-The enhanced environment variable handling is backward compatible. Existing deployments will continue to work, but you can now take advantage of:
-
-- Better error handling
-- Improved logging
-- Comment support
-- Quote handling
-- Validation
 
 ## Security Considerations
 
-1. **Environment files are created in `/tmp/`** for easy cleanup
-2. **Unique file names** prevent conflicts between deployments
-3. **Input validation** prevents malformed environment variables
-4. **Logging** provides audit trail for environment variable processing
+1. **Never commit sensitive environment variables to version control**
+2. **Use strong JWT secrets in production**
+3. **Rotate API keys and secrets regularly**
+4. **Use environment-specific configurations**
+5. **Validate environment variables on application startup**
 
-## Performance
+## Production Checklist
 
-- **Minimal overhead**: Environment variable processing is fast
-- **Efficient file handling**: Uses Docker's native `--env-file` feature
-- **Memory efficient**: Processes variables line by line
-- **Cleanup**: Environment files are in `/tmp/` for automatic cleanup 
+- [ ] Set `JWT_SECRET` to a strong, unique value
+- [ ] Configure `DB_SCHEMA=deploy_knot`
+- [ ] Set appropriate log levels (`LOG_LEVEL=info` or `LOG_LEVEL=warn`)
+- [ ] Configure production database credentials
+- [ ] Set up Redis with authentication if needed
+- [ ] Configure server timeouts for production load
+- [ ] Test environment variable processing
+- [ ] Verify database schema creation 

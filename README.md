@@ -1,87 +1,95 @@
 # DeployKnot
 
-A CI/CD automation tool for Webknot built with Go + Gin + Ansible.
+A modern CI/CD automation platform built with Go, featuring a microservices architecture with server and worker components for automated deployment management.
 
 ## Features
 
-- **Health Check Endpoint**: `/health` and `/api/v1/health`
-- **Database Integration**: PostgreSQL with migrations
-- **Redis Integration**: For job queue functionality
-- **Structured Logging**: JSON-formatted logs
-- **CORS Support**: Cross-origin resource sharing
-- **Graceful Shutdown**: Proper server shutdown handling
+- **🚀 Automated Deployments**: SSH-based deployment automation
+- **🔐 Authentication**: JWT-based user authentication
+- **📊 Real-time Logs**: Server-Sent Events for live deployment monitoring
+- **🗄️ Database Integration**: PostgreSQL with automatic migrations
+- **⚡ Job Queue**: Redis-based job queue for background processing
+- **📝 Structured Logging**: JSON-formatted logs with configurable levels
+- **🌐 CORS Support**: Cross-origin resource sharing enabled
+- **🔄 Graceful Shutdown**: Proper server shutdown handling
+- **🐳 Docker Support**: Containerized deployment with Docker
+- **📦 Environment Variables**: Advanced environment variable management
+- **🔍 Health Monitoring**: Comprehensive health check endpoints
 
 ## Architecture
 
 ```
-┌──────────┐      HTTPS/SSE       ┌──────────────┐     MQ/HTTP     ┌───────────────┐
-│  Browser │◀────────────────────▶│   Go API     │◀─────────────▶│ Job Queue     │
-│  UI (FE) │  (REST + Server-Sent  │  Service     │                │ (Redis)       │
+┌──────────┐      HTTPS/SSE       ┌──────────────┐     Redis     ┌───────────────┐
+│  Browser │◀────────────────────▶│   Server     │◀─────────────▶│   Worker      │
+│  UI (FE) │  (REST + Server-Sent  │  (API)       │   Queue       │  (Background) │
 └──────────┘     Events for logs) └──────────────┘                └───────────────┘
-                                           │
-                                           ▼
-                                     ┌──────────────┐
-                                     │  Ansible     │
-                                     │  Worker      │
-                                     └──────────────┘
+                                           │                              │
+                                           ▼                              ▼
+                                     ┌──────────────┐              ┌──────────────┐
+                                     │ PostgreSQL   │              │ SSH Target   │
+                                     │ (Database)   │              │ (Deploy)     │
+                                     └──────────────┘              └──────────────┘
 ```
 
-## Prerequisites
+## Quick Start
 
-- Go 1.21+
+### Prerequisites
+
+- Go 1.24.4+
 - PostgreSQL (Docker or local)
 - Redis (Docker or local)
-- golang-migrate CLI tool
+- Docker & Docker Compose (optional)
 
-## Setup
+### Local Development
 
-1. **Clone the repository**
+1. **Clone and setup**:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/rohanreddymelachervu/DeployKnot.git
    cd DeployKnot
+   cp sample.env .env
    ```
 
-2. **Install dependencies**
+2. **Start services**:
    ```bash
-   go mod tidy
+   docker-compose up -d
    ```
 
-3. **Set up PostgreSQL**
+3. **Run the application**:
    ```bash
-   # Using Docker
-   docker run --name postgres-deployknot \
-     -e POSTGRES_PASSWORD=root \
-     -e POSTGRES_DB=postgres \
-     -p 5432:5432 \
-     -d postgres:15
-   
-   # Create schema
-   psql -h localhost -U postgres -d postgres -c "CREATE SCHEMA IF NOT EXISTS deploy_knot;"
-   ```
-
-4. **Set up Redis**
-   ```bash
-   # Using Docker
-   docker run --name redis-deployknot \
-     -p 6379:6379 \
-     -d redis:7-alpine
-   ```
-
-5. **Run migrations**
-   ```bash
-   migrate -path migrations -database "postgres://postgres:root@localhost:5432/postgres?sslmode=disable&search_path=deploy_knot" up
-   ```
-
-6. **Create .env file**
-   ```bash
-   cp .env.example .env
-   # Edit .env with your configuration
-   ```
-
-7. **Run the server**
-   ```bash
+   # Terminal 1: Server
    go run cmd/server/main.go
+   
+   # Terminal 2: Worker
+   go run cmd/worker/main.go
    ```
+
+4. **Test the API**:
+   ```bash
+   curl http://localhost:8080/api/v1/health
+   ```
+
+For detailed setup instructions, see [LOCAL_SETUP.md](LOCAL_SETUP.md).
+
+## API Endpoints
+
+### Health & Status
+- `GET /health` - Basic health check
+- `GET /api/v1/health` - API health check with detailed status
+
+### Authentication
+- `POST /api/v1/auth/register` - User registration
+- `POST /api/v1/auth/login` - User login
+- `GET /api/v1/auth/profile` - Get user profile (authenticated)
+
+### Deployments
+- `GET /api/v1/deployments` - List deployments (authenticated)
+- `POST /api/v1/deployments` - Create deployment (authenticated)
+- `GET /api/v1/deployments/:id` - Get deployment details (authenticated)
+- `GET /api/v1/deployments/:id/logs` - Stream deployment logs (SSE)
+- `GET /api/v1/deployments/:id/steps` - Get deployment steps (authenticated)
+
+### Users
+- `GET /api/v1/users/:id/deployments` - Get user's deployments (authenticated)
 
 ## Environment Variables
 
@@ -98,8 +106,8 @@ SERVER_IDLE_TIMEOUT=60s
 DB_HOST=localhost
 DB_PORT=5432
 DB_USER=postgres
-DB_PASSWORD=root
-DB_NAME=postgres
+DB_PASSWORD=password
+DB_NAME=deployknot
 DB_SSLMODE=disable
 DB_SCHEMA=deploy_knot
 
@@ -111,27 +119,22 @@ REDIS_DB=0
 
 # Logging Configuration
 LOG_LEVEL=info
+
+# JWT Configuration
+JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 ```
 
-## API Endpoints
-
-### Health Check
-- `GET /health` - Health check endpoint
-- `GET /api/v1/health` - Health check endpoint (API versioned)
-
-### Deployment (Coming Soon)
-- `GET /api/v1/deployments` - List deployments
-- `POST /api/v1/deployments` - Create deployment
-- `GET /api/v1/deployments/:id` - Get deployment details
-- `GET /api/v1/deployments/:id/logs` - Stream deployment logs (SSE)
+For detailed environment variable documentation, see [ENVIRONMENT_VARIABLES.md](ENVIRONMENT_VARIABLES.md).
 
 ## Project Structure
 
 ```
 DeployKnot/
 ├── cmd/
-│   └── server/
-│       └── main.go          # Application entry point
+│   ├── server/
+│   │   └── main.go          # Server entry point
+│   └── worker/
+│       └── main.go          # Worker entry point
 ├── internal/
 │   ├── api/
 │   │   └── router.go        # API router setup
@@ -139,17 +142,52 @@ DeployKnot/
 │   │   └── config.go        # Configuration management
 │   ├── database/
 │   │   ├── database.go      # PostgreSQL connection
-│   │   └── redis.go         # Redis connection
+│   │   ├── redis.go         # Redis connection
+│   │   └── repository.go    # Database operations
 │   ├── handlers/
+│   │   ├── auth.go          # Authentication handlers
+│   │   ├── deployment.go    # Deployment handlers
 │   │   └── health.go        # Health check handler
-│   └── models/
-│       └── deployment.go    # Data models
+│   ├── middleware/
+│   │   └── auth.go          # Authentication middleware
+│   ├── models/
+│   │   ├── deployment.go    # Deployment models
+│   │   └── user.go          # User models
+│   └── services/
+│       ├── deployment.go    # Deployment business logic
+│       ├── queue.go         # Job queue service
+│       └── user.go          # User service
 ├── migrations/              # Database migrations
 ├── pkg/
 │   └── logger/
 │       └── logger.go        # Logging utilities
+├── Dockerfile.server        # Server Dockerfile
+├── Dockerfile.worker        # Worker Dockerfile
+├── docker-compose.yml       # Local development setup
+├── go.mod                   # Go module file
+├── go.sum                   # Go dependencies checksum
 └── README.md
 ```
+
+## Deployment
+
+### Docker Deployment
+
+```bash
+# Build images
+docker build -f Dockerfile.server -t deployknot-server .
+docker build -f Dockerfile.worker -t deployknot-worker .
+
+# Run with docker-compose
+docker-compose up -d
+```
+
+### Production Deployment
+
+For production deployment options, see:
+- [Oracle Cloud Free VPS](ORACLE_CLOUD_DEPLOYMENT.md)
+- [Render Free Tier](RENDER_DEPLOYMENT.md)
+- [Fly.io Free Tier](FLY_IO_DEPLOYMENT.md)
 
 ## Development
 
@@ -160,35 +198,96 @@ go test ./...
 
 ### Building
 ```bash
+# Build server
 go build -o bin/server cmd/server/main.go
+
+# Build worker
+go build -o bin/worker cmd/worker/main.go
 ```
 
-### Running with Docker
+### Code Quality
 ```bash
-# Build image
-docker build -t deployknot .
+# Format code
+go fmt ./...
 
-# Run container
-docker run -p 8080:8080 deployknot
+# Run linter
+golangci-lint run
 ```
 
-## Next Steps
+## API Documentation
 
-1. **Deployment Handlers**: Implement deployment creation and management
-2. **Ansible Integration**: Create Ansible worker for deployment execution
-3. **Job Queue**: Implement Redis-based job queue
-4. **Frontend**: Create React/Vue frontend for deployment management
-5. **Authentication**: Add RBAC and authentication middleware
-6. **Monitoring**: Add Prometheus metrics and Grafana dashboards
+### Postman Collection
+Import `DeployKnot_API_Collection.json` into Postman for complete API testing.
+
+### Example Requests
+
+#### Create Deployment
+```bash
+curl -X POST http://localhost:8080/api/v1/deployments \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{
+    "target_ip": "192.168.1.100",
+    "ssh_username": "root",
+    "ssh_password": "password",
+    "github_repo_url": "https://github.com/example/repo",
+    "github_pat": "your-github-pat",
+    "github_branch": "main",
+    "port": 3000,
+    "container_name": "my-app",
+    "project_name": "my-project",
+    "deployment_name": "production-deploy",
+    "environment_vars": "NODE_ENV=production\nPORT=3000"
+  }'
+```
+
+#### Stream Deployment Logs
+```bash
+curl -N http://localhost:8080/api/v1/deployments/DEPLOYMENT_ID/logs
+```
+
+## Features in Detail
+
+### 🔐 Authentication System
+- JWT-based authentication
+- User registration and login
+- Protected API endpoints
+- User-specific deployments
+
+### 🚀 Deployment Automation
+- SSH-based deployment to target servers
+- GitHub repository integration
+- Docker container deployment
+- Environment variable management
+- Real-time deployment monitoring
+
+### 📊 Job Queue System
+- Redis-based job queue
+- Background worker processing
+- Job status tracking
+- Failed job handling
+
+### 📝 Logging & Monitoring
+- Structured JSON logging
+- Real-time log streaming via SSE
+- Deployment step tracking
+- Error handling and reporting
 
 ## Contributing
 
 1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Add tests
-5. Submit a pull request
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## License
 
-MIT License 
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+- **Documentation**: Check the `.md` files in this repository
+- **API Testing**: Use the Postman collection
+- **Issues**: Report bugs and feature requests on GitHub
+- **Local Setup**: See [LOCAL_SETUP.md](LOCAL_SETUP.md) for detailed setup instructions 
