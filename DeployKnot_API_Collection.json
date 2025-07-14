@@ -109,7 +109,7 @@
 						{ "key": "ssh_username", "value": "root", "type": "text" },
 						{ "key": "ssh_password", "value": "Webknot@1234", "type": "text" },
 						{ "key": "github_repo_url", "value": "https://github.com/rohanreddymelachervu/DeployKnot-test", "type": "text" },
-						{ "key": "github_pat", "value": "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", "type": "text" },
+						{ "key": "github_pat", "value": "PAT", "type": "text" },
 						{ "key": "github_branch", "value": "main", "type": "text" },
 						{ "key": "port", "value": "3000", "type": "text" },
 						{ "key": "container_name", "value": "my-app-test", "type": "text" },
