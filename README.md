@@ -170,11 +170,11 @@ DEBUG=false
 ```
 curl --location 'http://localhost:8080/api/v1/deployments' \
 --header 'Authorization: Bearer <YOUR_TOKEN>' \
--F target_ip=172.235.15.164 \
+-F target_ip=<IP> \
 -F ssh_username=root \
--F ssh_password=Webknot@1234 \
--F github_repo_url=https://github.com/rohanreddymelachervu/DeployKnot-test \
--F github_pat=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 \
+-F ssh_password=password \
+-F github_repo_url=https://github.com/user/repo \
+-F github_pat=PAT \
 -F github_branch=main \
 -F port=3000 \
 -F container_name=my-app-test \
